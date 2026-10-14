@@ -1,0 +1,2062 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<base target="_top">
+<title>心電図匿名化チェッカー</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+html,body{margin:0}body{font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}
+
+/* Layout: two roles, one page. Each role is a narrow rail (inputs, lists) beside one large
+   stage for the ECG; on a phone everything stacks in the order the work is done. */
+:root {
+  --bg: #f2f4f8; --surface: #ffffff; --stage: #e4e8ef;
+  --ink: #17202e; --muted: #586377; --line: #d3d9e4;
+  --accent: #23479a; --on-accent: #ffffff; --accent-soft: #e6ecf9;
+  --ok: #17703f; --ok-bg: #e2f3e9;
+  --warn: #7d5200; --warn-bg: #fcefd0;
+  --stop: #ad241c; --stop-bg: #fce6e3;
+  --mark-red: #d62828; --mark-blue: #1e6edc;
+  --font: "IBM Plex Sans JP", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10141b; --surface: #1a202a; --stage: #0a0d12;
+    --ink: #e7ebf2; --muted: #9ba6b9; --line: #2d3644;
+    --accent: #93b2ff; --on-accent: #0c1322; --accent-soft: #1d2a47;
+    --ok: #74d6a0; --ok-bg: #14301f;
+    --warn: #f1c46c; --warn-bg: #382b0c;
+    --stop: #ff9086; --stop-bg: #3b1613;
+    --mark-red: #ff6b6b; --mark-blue: #6fa8ff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10141b; --surface: #1a202a; --stage: #0a0d12;
+  --ink: #e7ebf2; --muted: #9ba6b9; --line: #2d3644;
+  --accent: #93b2ff; --on-accent: #0c1322; --accent-soft: #1d2a47;
+  --ok: #74d6a0; --ok-bg: #14301f;
+  --warn: #f1c46c; --warn-bg: #382b0c;
+  --stop: #ff9086; --stop-bg: #3b1613;
+  --mark-red: #ff6b6b; --mark-blue: #6fa8ff;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 15px; line-height: 1.65; }
+.app { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 18px; }
+.masthead { display: grid; gap: 6px; }
+.masthead h1 { margin: 0; font-size: 1.5rem; font-weight: 700; line-height: 1.3; text-wrap: balance; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tag { font-size: .72rem; font-weight: 500; letter-spacing: .06em; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+.masthead p { margin: 0; color: var(--muted); max-width: 48em; }
+.trace { width: 100%; max-width: 420px; height: 26px; color: var(--accent); display: block; }
+
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 520px; margin-top: 8px; }
+.roles button { font: inherit; cursor: pointer; display: grid; gap: 0; justify-items: start; text-align: left; padding: 10px 14px; border-radius: var(--r); border: 1px solid var(--line); background: var(--surface); color: var(--ink); min-height: 56px; position: relative; }
+.roles b { font-weight: 700; } .roles small { color: var(--muted); font-size: .8rem; }
+.roles button[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.count { position: absolute; top: 8px; right: 10px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--stop); color: var(--surface); font: 500 .78rem/22px var(--mono); text-align: center; }
+
+.view { display: grid; gap: 16px; min-width: 0; }
+/* phone: list, then the opened request, then settings */
+.dr-rail { display: contents; } #p-case { order: 2; } #p-set { order: 3; }
+@media (min-width: 940px) {
+  .view { grid-template-columns: 330px minmax(0, 1fr); align-items: start; }
+  #p-shoot { grid-area: 1 / 1; } #p-send { grid-area: 2 / 1; } #p-check { grid-area: 1 / 2 / 3 / 3; } #p-limits { grid-column: 1 / -1; }
+  #gate { grid-column: 1 / -1; max-width: 460px; }
+  .dr-rail { display: grid; gap: 16px; min-width: 0; grid-area: 1 / 1; } #p-case { grid-area: 1 / 2; order: 0; } #p-set { order: 0; }
+}
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 12px; min-width: 0; align-content: start; }
+h2 { margin: 0; font-size: .95rem; font-weight: 700; display: flex; align-items: baseline; gap: 8px; }
+h2 .n { font-family: var(--mono); font-weight: 500; color: var(--accent); }
+h3 { margin: 0; font-size: .88rem; font-weight: 700; }
+.hint, .note { margin: 0; color: var(--muted); font-size: .85rem; }
+
+button, .btn, input, textarea, select { font: inherit; }
+.btn { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 500; text-align: center; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 700; }
+.btn.danger { color: var(--stop); border-color: var(--stop); }
+.btn.small { min-height: 36px; padding: 4px 12px; font-size: .85rem; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.btn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+:is(.btn, .roles button, summary, input, textarea, select):focus-visible, .pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.samples { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.samples .btn { min-height: 40px; padding: 6px 10px; font-size: .85rem; font-weight: 400; }
+
+.field { display: grid; gap: 4px; min-width: 0; }
+.field > span { font-size: .84rem; color: var(--muted); }
+input[type="text"], input[type="email"], input[type="password"], input[type="datetime-local"], textarea, select { width: 100%; min-height: 42px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+textarea { resize: vertical; line-height: 1.5; }
+.fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); align-items: start; }
+.picks { display: flex; flex-wrap: wrap; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.picks legend { padding: 0; font-size: .84rem; color: var(--muted); margin-bottom: 4px; }
+.pick { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.pick:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pick input, .confirm input { accent-color: var(--accent); }
+.pick.block { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 2px 10px; }
+.pick.block input { margin-top: 5px; } .pick.block small { grid-column: 2; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+
+.banner { border-radius: var(--r); padding: 12px 14px; display: grid; gap: 2px; border: 1px solid transparent; }
+.banner strong { font-size: 1.02rem; font-weight: 700; } .banner span { font-size: .88rem; }
+.banner[data-level="ok"] { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.banner[data-level="warn"] { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+.banner[data-level="stop"] { background: var(--stop-bg); color: var(--stop); border-color: var(--stop); }
+.banner[data-level="note"] { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+.banner[data-level="busy"], .banner[data-level="idle"] { background: var(--surface); color: var(--muted); border-color: var(--line); }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toolbar .grow { flex: 1 1 auto; }
+.src { font-size: .82rem; color: var(--muted); }
+.stage { background: var(--stage); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 78vh; -webkit-overflow-scrolling: touch; }
+.stage canvas, .stage img { display: block; width: 100%; height: auto; }
+.stage.zoom canvas, .stage.zoom img { width: 260%; max-width: none; }
+.stage.draw canvas { cursor: crosshair; touch-action: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; list-style: none; font-size: .8rem; color: var(--muted); }
+.legend i { display: inline-block; width: 14px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 2px solid; }
+.legend .r i { border-color: var(--mark-red); } .legend .b i { border-color: var(--mark-blue); }
+.legend .d i { border-color: var(--muted); background: var(--muted); }
+
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 8px 0 0; font-size: .86rem; }
+.facts dt { color: var(--muted); } .facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.confirm { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; cursor: pointer; }
+.confirm input { width: 20px; height: 20px; margin: 3px 0 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.alert { margin: 0; font-size: .85rem; color: var(--stop); }
+details { border-top: 1px solid var(--line); padding-top: 10px; }
+summary { cursor: pointer; font-weight: 500; }
+details ul { margin: 8px 0 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: .88rem; }
+details h3 { margin-top: 12px; }
+.tech { font-family: var(--mono); font-size: .78rem; color: var(--muted); margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* draft + inbox rows share one shape: thumbnail, two lines of text, one action */
+.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.row img { width: 76px; height: 50px; object-fit: cover; border-radius: 4px; background: var(--stage); display: block; }
+.row .t { display: grid; gap: 0; min-width: 0; font-size: .86rem; }
+.row .t b { font-weight: 500; overflow-wrap: anywhere; } .row .t span { color: var(--muted); overflow-wrap: anywhere; }
+button.row { font: inherit; color: inherit; background: var(--surface); text-align: left; cursor: pointer; width: 100%; }
+button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.badge { display: inline-block; font-size: .74rem; font-weight: 500; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.badge.now { color: var(--accent); border-color: var(--accent); }
+.badge.new { color: var(--stop); border-color: var(--stop); }
+.empty { margin: 0; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: .88rem; }
+
+.mail { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: .86rem; }
+.mail header { padding: 8px 12px; background: var(--bg); display: grid; gap: 2px; color: var(--muted); }
+.mail header b { color: var(--ink); font-weight: 500; }
+.mail p { margin: 0; padding: 10px 12px; white-space: pre-line; overflow-wrap: anywhere; }
+
+.shot { display: grid; gap: 8px; margin: 0; min-width: 0; }
+.shot figcaption { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: .88rem; }
+.shot figcaption .when { font-variant-numeric: tabular-nums; font-weight: 500; }
+.shot figcaption .memo { color: var(--muted); overflow-wrap: anywhere; }
+.shot figcaption .grow { flex: 1 1 auto; }
+.casehead { display: grid; gap: 4px; }
+.casehead .meta { color: var(--muted); font-size: .86rem; font-variant-numeric: tabular-nums; }
+.casenote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.compare { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--r); }
+.roster { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: center; font-size: .86rem; }
+.roster label { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.roster input { min-height: 36px; padding: 4px 8px; }
+@media (prefers-reduced-motion: no-preference) { .btn, .roles button { transition: border-color .12s, box-shadow .12s; } }
+.row.plain { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
+.attach { list-style: none; margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); display: grid; gap: 4px; font-family: var(--mono); font-size: .78rem; color: var(--muted); overflow-wrap: anywhere; }
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: .84rem; }
+.log li { display: grid; gap: 0; padding-bottom: 6px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.log time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.loading { margin: 0; padding: 28px 12px; text-align: center; color: var(--muted); font-size: .88rem; }
+.qr { display: grid; gap: 8px; justify-items: start; }
+.qr canvas { background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid var(--line); width: 190px; height: 190px; image-rendering: pixelated; }
+.url { font-family: var(--mono); font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; user-select: all; margin: 0; }
+.subform { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
+.shoot { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stage.tap canvas { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="masthead">
+    <h1>心電図匿名化チェッカー <span class="tag" id="demoTag" hidden>操作デモ</span></h1>
+    <svg class="trace" viewBox="0 0 420 26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M0 17h38c4 0 5-4 9-4s5 4 9 4h10l3 3 5-19 5 21 3-5h12c6 0 8-7 15-7s9 7 15 7h44c4 0 5-4 9-4s5 4 9 4h10l3 3 5-19 5 21 3-5h12c6 0 8-7 15-7s9 7 15 7h44c4 0 5-4 9-4s5 4 9 4h10l3 3 5-19 5 21 3-5h12c6 0 8-7 15-7s9 7 15 7h20"/></svg>
+    <p id="lead">病棟で撮った12誘導心電図から氏名・IDを隠し、当番医が確認できる共有の保管場所に送ります。</p>
+    <div class="roles" id="roles" role="tablist" aria-label="画面の切り替え" hidden>
+      <button type="button" role="tab" id="tab-nurse" aria-selected="true" aria-controls="view-nurse"><b>看護師用</b><small>撮って送る</small></button>
+      <button type="button" role="tab" id="tab-doctor" aria-selected="false" aria-controls="view-doctor"><b>医師用</b><small>見る・比べる・消す</small></button>
+    </div>
+  </header>
+
+  <section class="panel" id="p-wait" aria-live="polite"><p class="loading" id="waitText">読み込んでいます</p></section>
+
+  <section class="panel" id="p-denied" hidden>
+    <h2>このページは開けません</h2>
+    <p class="hint">看護師の方は、病棟に掲示されているQRコードから開き直してください。QRコードが新しくなった場合は、古いものでは開けません。</p>
+    <div class="actions"><button class="btn" type="button" id="toDoctor">医師用の画面を開く</button></div>
+  </section>
+
+  <section class="panel" id="p-setup" hidden>
+    <h2>URLが途中までしかありません</h2>
+    <p class="hint">看護師の方は病棟に掲示されているQRコードから、医師の方はメールのURLから開き直してください。</p>
+    <p class="hint">管理者の方：Apps Script の「デプロイ」→「デプロイを管理」に出る「ウェブアプリ」のURL（/exec で終わるもの）を貼り付けると、医師用の画面が開きます。</p>
+    <label class="field" for="setupUrl"><span>ウェブアプリのURL</span><input type="text" id="setupUrl" autocomplete="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <div class="actions"><button class="btn" type="button" id="setupBtn">医師用の画面を開く</button><span class="note" id="setupNote" role="status"></span></div>
+  </section>
+
+  <!-- ===================== nurse ===================== -->
+  <div class="view" id="view-nurse" role="tabpanel" aria-labelledby="tab-nurse" hidden>
+    <section class="panel" id="p-shoot" aria-labelledby="h-shoot">
+      <h2 id="h-shoot"><span class="n">1</span>撮る</h2>
+      <div class="shoot">
+        <label class="btn primary" for="camInput">カメラで撮る</label>
+        <input class="visually-hidden" type="file" id="camInput" accept="image/*" capture="environment">
+        <label class="btn" for="fileInput">写真から選ぶ</label>
+        <input class="visually-hidden" type="file" id="fileInput" accept="image/*">
+      </div>
+      <p class="hint">氏名やIDなど個人情報がなるべく入らないように撮影してください。</p>
+      <details id="sampleBox" hidden>
+        <summary>見本で試す（デモ用）</summary>
+        <p class="hint" style="margin-top:8px">氏名・IDはすべて架空です。</p>
+        <div class="samples" style="margin-top:8px">
+          <button class="btn" type="button" data-sample="clean" id="s-clean">文字なし</button>
+          <button class="btn" type="button" data-sample="margin" id="s-margin">余白に氏名・ID</button>
+          <button class="btn" type="button" data-sample="ingrid" id="s-ingrid">方眼内に氏名・ID</button>
+          <button class="btn" type="button" data-sample="photo" id="s-photo">斜め撮影・ラベル</button>
+        </div>
+      </details>
+    </section>
+
+    <section class="panel" id="p-check" aria-labelledby="h-check">
+      <h2 id="h-check"><span class="n">2</span>確かめて、送信リストに入れる</h2>
+      <div class="banner" id="banner" data-level="idle" role="status" aria-live="polite"><strong>まだ写真がありません</strong><span>「1 撮る」から始めてください。</span></div>
+      <div class="toolbar">
+        <button class="btn small" type="button" id="v-out" aria-pressed="true" disabled>送信用の画像</button>
+        <button class="btn small" type="button" id="v-rev" aria-pressed="false" disabled>撮った写真</button>
+        <span class="grow src" id="srcLabel"></span>
+        <button class="btn small" type="button" id="zoomBtn" aria-pressed="false">拡大</button>
+      </div>
+      <div class="stage" id="stage"><canvas id="view" width="1600" height="400" aria-label="処理後の心電図画像"></canvas></div>
+      <ul class="legend" id="legend" hidden>
+        <li class="d"><i></i>自動で切り落とす範囲（方眼の外側・波形の上下）</li>
+      </ul>
+      <div class="toolbar">
+        <button class="btn small" type="button" id="drawBtn" aria-pressed="false" disabled>手で隠す</button>
+        <button class="btn small" type="button" id="undoBtn" disabled>1つ戻す</button>
+        <button class="btn small" type="button" id="cropBtn" aria-pressed="false" disabled>切り抜く</button>
+        <button class="btn small" type="button" id="uncropBtn" hidden>切り抜き前に戻す</button>
+        <span class="src" id="drawHint"></span>
+      </div>
+      <div class="fields">
+        <fieldset class="picks">
+          <legend>この心電図は</legend>
+          <label class="pick"><input type="radio" name="kind" id="kind-now" value="now" checked>今回</label>
+          <label class="pick"><input type="radio" name="kind" id="kind-past" value="past">過去（比較用）</label>
+        </fieldset>
+        <label class="field" for="recAt"><span>記録日</span><input type="date" id="recAt"></label>
+        <label class="field" for="itemNote"><span>この1枚のメモ（任意）</span><input type="text" id="itemNote" maxlength="60" placeholder="例：胸痛時 14:20／入院時" autocomplete="off"></label>
+      </div>
+      <label class="confirm" for="confirmBox"><input type="checkbox" id="confirmBox" disabled><span>氏名・ID・生年月日・バーコードが残っていないことを確認した。</span></label>
+      <div class="actions">
+        <button class="btn primary" type="button" id="addBtn" disabled>送信リストに追加</button>
+        <span class="note" id="addNote" role="status"></span>
+      </div>
+      <p class="alert" id="itemAlert" hidden></p>
+      <details>
+        <summary>判定の内訳</summary>
+        <dl class="facts" id="facts"></dl>
+        <p class="tech" id="tech"></p>
+      </details>
+    </section>
+
+    <section class="panel" id="p-send" aria-labelledby="h-send">
+      <h2 id="h-send"><span class="n">3</span>当番医に送る</h2>
+      <ul class="rows" id="draftList"></ul>
+      <p class="empty" id="draftEmpty">まだ1枚も入っていません。2 で確認した画像を「送信リストに追加」すると、ここに並びます。</p>
+      <label class="field" for="ward"><span>病棟</span><input type="text" id="ward" maxlength="20" placeholder="例：4階" autocomplete="off"></label>
+      <label class="field" for="caseNote"><span>当番医へのコメント</span><textarea id="caseNote" rows="3" maxlength="300" placeholder="例：胸痛時の心電図です。確認お願いします。"></textarea></label>
+      <p class="hint">個人情報は記載せずに電話で伝えてください。</p>
+      <fieldset class="picks" id="toBox" hidden style="display:grid">
+        <legend>メールで知らせる医師</legend>
+        <div id="toList" style="display:grid;gap:8px"></div>
+      </fieldset>
+      <p class="alert" id="caseAlert" role="alert" hidden></p>
+      <button class="btn primary" type="button" id="sendBtn" disabled>送信</button>
+      <p class="note" id="sendStatus" role="status"></p>
+      <div id="sent" hidden style="display:grid;gap:10px">
+        <div class="banner" data-level="ok" role="status"><strong id="sentTitle">送信しました</strong><span id="sentText">当番医に電話で、心電図を送ったことを伝えてください。この端末に画像は残っていません。</span></div>
+        <div class="actions">
+          <button class="btn small danger" type="button" id="recallBtn">この送信を取り消す</button>
+          <span class="note" id="recallNote" role="status"></span>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ===================== doctor ===================== -->
+  <div class="view" id="view-doctor" role="tabpanel" aria-labelledby="tab-doctor" hidden>
+    <form class="panel" id="gate" autocomplete="off" hidden>
+      <h2>医師共通のパスコード</h2>
+      <label class="field" for="pass"><span>パスコード</span><input type="password" id="pass" maxlength="20" autocomplete="off"></label>
+      <div class="actions"><button class="btn primary" type="submit" id="unlockBtn">開く</button><span class="alert" id="passAlert" role="alert" hidden></span></div>
+      <p class="hint" id="demoPass" hidden>デモ用のパスコードは <b style="font-family:var(--mono)">2468</b> です。</p>
+    </form>
+
+    <div class="dr-rail" id="dr-rail" hidden>
+      <section class="panel" id="p-inbox" aria-labelledby="h-inbox">
+        <h2 id="h-inbox">届いた心電図</h2>
+        <ul class="rows" id="inbox"></ul>
+        <p class="empty" id="inboxEmpty" hidden>届いている心電図はありません。</p>
+        <div class="actions">
+          <button class="btn small" type="button" id="refreshBtn">更新</button>
+          <button class="btn small danger" type="button" id="wipeBtn">すべて削除</button>
+          <button class="btn small" type="button" id="wipeNo" hidden>やめる</button>
+        </div>
+        <p class="note" id="inboxNote" role="status"></p>
+      </section>
+
+      <section class="panel" id="p-set" aria-labelledby="h-set">
+        <h2 id="h-set">設定</h2>
+        <label class="field" for="retention"><span>自動で削除するまでの時間</span>
+          <select id="retention">
+            <option value="24">24時間</option>
+            <option value="72">72時間</option>
+            <option value="168">7日</option>
+          </select>
+        </label>
+        <p class="note" id="setNote" role="status"></p>
+        <div class="subform">
+          <h3>通知メールの宛先（当番医）</h3>
+          <p class="hint">登録した医師を、看護師が送信するときに選べます。選ばれた医師に、確認用のURLがメールで届きます。看護師の画面に出るのは名前だけです。</p>
+          <ul class="rows" id="recips"></ul>
+          <p class="empty" id="recipsEmpty" hidden>まだ登録がありません。</p>
+          <form id="recipForm" autocomplete="off" novalidate style="display:grid;gap:10px">
+            <label class="field" for="rName"><span>名前</span><input type="text" id="rName" maxlength="20" placeholder="例：循環器 太郎" autocomplete="off"></label>
+            <label class="field" for="rMail"><span>メールアドレス</span><input type="email" id="rMail" maxlength="100" placeholder="例：taro@example.com" inputmode="email" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+            <div class="actions"><button class="btn small" type="submit" id="rAdd">登録する</button><span class="note" id="rNote" role="status"></span></div>
+          </form>
+          <p class="hint" id="mailLeft"></p>
+        </div>
+        <div class="subform">
+          <h3>看護師用のQRコード</h3>
+          <div class="qr" id="qrBox" hidden><canvas id="qr" width="190" height="190" aria-label="看護師用ページのQRコード"></canvas><p class="url" id="nurseUrl"></p></div>
+          <p class="hint" id="qrNote">印刷して病棟に掲示してください。</p>
+          <p class="hint" id="doctorUrlBox" hidden>医師用URL（医師に伝えるもの）<br><span class="url" id="doctorUrl"></span></p>
+          <div id="urlFix" hidden style="display:grid;gap:8px">
+            <label class="field" for="baseUrl"><span>ウェブアプリのURL（/exec で終わるもの）</span><input type="text" id="baseUrl" autocomplete="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec"></label>
+            <div class="actions"><button class="btn small" type="button" id="baseBtn">このURLでQRコードを作る</button><span class="note" id="baseNote" role="status"></span></div>
+          </div>
+        </div>
+        <div class="subform" id="pageBox" hidden>
+          <h3>入口のページ</h3>
+          <p class="hint" id="pageNote"></p>
+          <label class="field" for="pageUrl"><span>index.html を置いた場所のURL</span><input type="text" id="pageUrl" autocomplete="off" spellcheck="false" inputmode="url" placeholder="https://…"></label>
+          <div class="actions"><button class="btn small" type="button" id="pageBtn">このURLを入口にする</button><button class="btn small" type="button" id="pageClear" hidden>Apps Script のURLに戻す</button><span class="note" id="pageMsg" role="status"></span></div>
+        </div>
+        <form class="subform" id="passForm" autocomplete="off">
+          <h3>パスコードの変更</h3>
+          <label class="field" for="oldPass"><span>今のパスコード</span><input type="password" id="oldPass" maxlength="20" autocomplete="off"></label>
+          <label class="field" for="newPass"><span>新しいパスコード（半角英数字6〜20文字）</span><input type="password" id="newPass" maxlength="20" autocomplete="off"></label>
+          <div class="actions"><button class="btn small" type="submit" id="passBtn">変更する</button><span class="note" id="passNote" role="status"></span></div>
+        </form>
+      </section>
+    </div>
+
+    <section class="panel" id="p-case" hidden aria-live="polite">
+      <p class="empty" id="caseEmpty">一覧から選ぶと、ここに心電図とコメントを表示します。</p>
+      <div id="caseBody" hidden style="display:grid;gap:14px">
+        <div class="casehead">
+          <h2 id="caseTitle"></h2>
+          <span class="meta" id="caseMeta"></span>
+        </div>
+        <p class="casenote" id="caseNoteOut"></p>
+        <div class="toolbar">
+          <button class="btn small" type="button" id="cmpBtn">2枚を並べて比べる</button>
+          <button class="btn small" type="button" id="caseZoom" aria-pressed="false">拡大</button>
+          <span class="grow note" id="cmpHint"></span>
+          <button class="btn small danger" type="button" id="delBtn">この依頼を削除</button>
+          <button class="btn small" type="button" id="delNo" hidden>やめる</button>
+        </div>
+        <div class="compare" id="compare" hidden></div>
+        <div id="shots" style="display:grid;gap:18px"></div>
+      </div>
+    </section>
+  </div>
+  <p class="note" id="verNote" style="text-align:right">画面 v5.3</p>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>window.ECG_BOOT = /*__BOOT__*/null;</script>
+<script>
+/* ECG photo de-identification core. Pure functions on RGBA arrays, no DOM.
+   analyze(rgba, W, H) -> { grid, keep, boxes, labels, stats }               */
+(function (root) {
+  'use strict';
+
+  function analyze(rgba, W, H, opt) {
+    opt = opt || {};
+    var N = W * H, i, p, x, y;
+    var t0 = Date.now();
+
+    /* ---------- 1. reference white from the brightest pixels -> white balance ---------- */
+    var L = new Uint8Array(N), hist = new Uint32Array(256);
+    for (i = 0, p = 0; i < N; i++, p += 4) {
+      var l = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8;
+      L[i] = l; hist[l]++;
+    }
+    var acc = 0, p90 = 255;
+    for (var v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= N * 0.1) { p90 = v; break; } }
+    var sr = 0, sg = 0, sb = 0;
+    for (i = 0, p = 0; i < N; i++, p += 4) {
+      if (L[i] >= p90) { sr += rgba[p]; sg += rgba[p + 1]; sb += rgba[p + 2]; }
+    }
+    var mean = (sr + sg + sb) / 3 || 1;
+    function clampGain(gn) { return gn < 0.6 ? 0.6 : gn > 1.7 ? 1.7 : gn; }
+    var gR = clampGain(mean / (sr || 1)), gG = clampGain(mean / (sg || 1)), gB = clampGain(mean / (sb || 1));
+
+    /* ---------- 2. balanced, 3x3-smoothed colour (tames sensor noise and JPEG chroma bleed) ---------- */
+    var R = blur3(rgba, 0, gR, W, H), G = blur3(rgba, 1, gG, W, H), B = blur3(rgba, 2, gB, W, H);
+    var DR = new Int8Array(N), DG = new Int8Array(N);   // chromaticity offset from neutral, x500
+    var minL = Math.max(30, p90 * 0.3);
+    var vx = 0, vy = 0, vw = 0;
+    for (i = 0; i < N; i++) {
+      var s = R[i] + G[i] + B[i] + 1;
+      var dr = R[i] / s - 1 / 3, dg = G[i] / s - 1 / 3;
+      var a = dr * 500, b = dg * 500;
+      DR[i] = a > 127 ? 127 : a < -127 ? -127 : a;
+      DG[i] = b > 127 ? 127 : b < -127 ? -127 : b;
+      if (L[i] >= minL) {
+        var d2 = dr * dr + dg * dg;
+        if (d2 >= 0.0001) {                        // dist >= 0.010
+          var dd = Math.sqrt(d2), w = Math.min(dd, 0.08) / dd;
+          vx += dr * w; vy += dg * w; vw += Math.min(dd, 0.08);
+        }
+      }
+    }
+    var vm = Math.sqrt(vx * vx + vy * vy), ux = 0, uy = 0, hasDir = false;
+    if (vm > 0 && vw > 0 && vm / vw > 0.3 && vw > N * 0.00002) { ux = vx / vm; uy = vy / vm; hasDir = true; }
+    function projAt(k) { return DR[k] * ux + DG[k] * uy; }   // along the grid colour, x500
+
+    /* ---------- 3. local paper brightness (coarse cells) ---------- */
+    var f = Math.max(6, Math.round(Math.max(W, H) / 250));
+    var FW = Math.ceil(W / f), FH = Math.ceil(H / f), FN = FW * FH;
+    var CF = 6, CW = Math.ceil(FW / CF), CH = Math.ceil(FH / CF), CN = CW * CH;
+    var cs = f * CF;
+    var bg = new Float32Array(CN), h2 = new Uint32Array(256);
+    for (var cy = 0; cy < CH; cy++) for (var cx = 0; cx < CW; cx++) {
+      h2.fill(0); var n = 0;
+      var y1 = Math.min(H, (cy + 1) * cs), x1 = Math.min(W, (cx + 1) * cs);
+      for (y = cy * cs; y < y1; y += 2) for (x = cx * cs; x < x1; x += 2) { h2[L[y * W + x]]++; n++; }
+      var a3 = 0, q = 255;
+      for (v = 255; v >= 0; v--) { a3 += h2[v]; if (a3 >= n * 0.1) { q = v; break; } }
+      bg[cy * CW + cx] = q;
+    }
+    var bgMax = new Float32Array(CN);
+    for (cy = 0; cy < CH; cy++) for (cx = 0; cx < CW; cx++) {
+      var mx = 0;
+      for (var oy = -1; oy <= 1; oy++) for (var ox = -1; ox <= 1; ox++) {
+        var yy = cy + oy, xx = cx + ox;
+        if (yy >= 0 && yy < CH && xx >= 0 && xx < CW && bg[yy * CW + xx] > mx) mx = bg[yy * CW + xx];
+      }
+      bgMax[cy * CW + cx] = mx;
+    }
+
+    /* ---------- 4. fine cells: mean grid colour over paper pixels ---------- */
+    var fSum = new Float32Array(FN), fCnt = new Uint16Array(FN), fPap = new Uint16Array(FN);
+    for (y = 0; y < H; y++) {
+      var fy = (y / f) | 0, row = y * W, crow = ((y / cs) | 0) * CW;
+      for (x = 0; x < W; x++) {
+        var k = row + x, c = fy * FW + ((x / f) | 0);
+        fCnt[c]++;
+        if (L[k] >= minL && L[k] >= 0.7 * bgMax[crow + ((x / cs) | 0)]) { fPap[c]++; fSum[c] += projAt(k); }
+      }
+    }
+    var fGrid = new Uint8Array(FN), fBlank = new Uint8Array(FN);
+    if (hasDir) for (i = 0; i < FN; i++) {
+      var mproj = fPap[i] ? fSum[i] / fPap[i] : 0;          // x500
+      fGrid[i] = fPap[i] >= 0.2 * fCnt[i] && mproj >= 3.0 ? 1 : 0;      // 0.006
+      fBlank[i] = fPap[i] >= 0.5 * fCnt[i] && mproj < 1.5 ? 1 : 0;
+    }
+
+    /* ---------- 5. coarse cells -> largest grid region ---------- */
+    var cSum = new Uint16Array(CN), cTot = new Uint16Array(CN);
+    for (y = 0; y < FH; y++) for (x = 0; x < FW; x++) {
+      var cc = ((y / CF) | 0) * CW + ((x / CF) | 0);
+      cTot[cc]++; cSum[cc] += fGrid[y * FW + x];
+    }
+    var cGrid = new Uint8Array(CN);
+    for (i = 0; i < CN; i++) cGrid[i] = cSum[i] >= 0.25 * cTot[i] ? 1 : 0;
+    var cRegion = largestComponent(cGrid, CW, CH);
+    var regionCells = 0; for (i = 0; i < CN; i++) regionCells += cRegion[i];
+    var coverage = regionCells / CN;
+
+    var result = {
+      W: W, H: H, cell: f, FW: FW, FH: FH,
+      grid: { found: false, coverage: coverage, bbox: null },
+      keep: null, boxes: [], labels: [],
+      stats: { p90: p90, hasDir: hasDir, ms: 0 }
+    };
+    /* ---------- 6. what to keep ----------
+       With a coloured grid: the grid area. Without one (black-and-white printouts, monitor strips,
+       photos of a monitor screen): the whole picture, and the user crops by hand.               */
+    /* a real grid is lines on paper: inside each cell the colour varies a lot. A coloured desk or wall does not. */
+    var cvs = [];
+    for (cy = 0; cy < CH; cy++) for (cx = 0; cx < CW; cx++) {
+      if (!cRegion[cy * CW + cx]) continue;
+      var sm = 0, sq = 0, sn = 0, yE2 = Math.min(H, (cy + 1) * cs), xE2 = Math.min(W, (cx + 1) * cs), lim = 0.7 * bgMax[cy * CW + cx];
+      for (y = cy * cs; y < yE2; y += 2) for (x = cx * cs; x < xE2; x += 2) {
+        var kc = y * W + x; if (L[kc] < minL || L[kc] < lim) continue;
+        var pv = projAt(kc); sm += pv; sq += pv * pv; sn++;
+      }
+      if (sn > 20) { var mu = sm / sn; cvs.push(Math.sqrt(Math.max(0, sq / sn - mu * mu)) / (Math.abs(mu) + 1)); }
+    }
+    var lattice = cvs.length ? median(cvs) : 0;
+    result.stats.lattice = lattice;
+    var gridOk = !opt.forcePlain && coverage >= 0.12 && regionCells >= 6 && lattice >= 0.15;
+    var keep = null, holeMask = new Uint8Array(FN), keepCells = 0, kx0 = FW, ky0 = FH, kx1 = -1, ky1 = -1;
+    if (gridOk) {
+      var cDil = dilate(cRegion, CW, CH, 1);
+      var m = new Uint8Array(FN);
+      for (y = 0; y < FH; y++) for (x = 0; x < FW; x++) {
+        if (fGrid[y * FW + x] && cDil[((y / CF) | 0) * CW + ((x / CF) | 0)]) m[y * FW + x] = 1;
+      }
+      m = erode(dilate(m, FW, FH, 3), FW, FH, 3);
+      var closed = m;
+      m = fillHoles(m, FW, FH);
+      keep = largestComponent(m, FW, FH);
+      for (i = 0; i < FN; i++) holeMask[i] = keep[i] && !closed[i] ? 1 : 0;
+      for (y = 0; y < FH; y++) for (x = 0; x < FW; x++) if (keep[y * FW + x]) {
+        keepCells++;
+        if (x < kx0) kx0 = x; if (x > kx1) kx1 = x; if (y < ky0) ky0 = y; if (y > ky1) ky1 = y;
+      }
+      if (keepCells < 0.1 * FN) gridOk = false;
+    }
+    var plain = !gridOk;
+    if (plain) {
+      keep = new Uint8Array(FN).fill(1); holeMask = new Uint8Array(FN); keepCells = FN;
+      kx0 = 0; ky0 = 0; kx1 = FW - 1; ky1 = FH - 1;
+      cRegion = new Uint8Array(CN).fill(1);
+    }
+    result.mode = plain ? 'plain' : 'grid';
+    var bbox = { x0: kx0 * f, y0: ky0 * f, x1: Math.min(W, (kx1 + 1) * f), y1: Math.min(H, (ky1 + 1) * f) };
+    result.grid.found = true; result.grid.bbox = bbox; result.keep = keep;
+    var keepNear = dilate(keep, FW, FH, 3);
+
+    /* ---------- 7. ink mask (only near the kept region) ----------
+       JPEG keeps colour only at coarse scale, so thin grid lines cannot be told from ink by colour.
+       They can by darkness: measure how dark this photo's bold grid lines are, threshold above that. */
+    var D = new Uint8Array(N);                               // darkness vs local paper, x200
+    for (y = 0; y < H; y++) {
+      var fy2 = (y / f) | 0, gy = (y + 0.5) / cs - 0.5, y0c = Math.floor(gy), wy = gy - y0c;
+      var ya = y0c < 0 ? 0 : y0c, yb = y0c + 1 >= CH ? CH - 1 : y0c + 1;
+      for (x = 0; x < W; x++) {
+        if (!keepNear[fy2 * FW + ((x / f) | 0)]) continue;
+        var gx = (x + 0.5) / cs - 0.5, x0c = Math.floor(gx), wx = gx - x0c;
+        var xa = x0c < 0 ? 0 : x0c, xb = x0c + 1 >= CW ? CW - 1 : x0c + 1;
+        var lb = (bgMax[ya * CW + xa] * (1 - wx) + bgMax[ya * CW + xb] * wx) * (1 - wy) +
+                 (bgMax[yb * CW + xa] * (1 - wx) + bgMax[yb * CW + xb] * wx) * wy;
+        var dv = 200 * (1 - L[y * W + x] / (lb + 1));
+        D[y * W + x] = dv < 0 ? 0 : dv;
+      }
+    }
+    var lineDark = [], hd = new Uint32Array(201);
+    for (cy = 0; cy < CH; cy++) for (cx = 0; cx < CW; cx++) {
+      if (!cRegion[cy * CW + cx]) continue;
+      hd.fill(0); var nn = 0, yE = Math.min(H, (cy + 1) * cs), xE = Math.min(W, (cx + 1) * cs);
+      for (y = cy * cs; y < yE; y += 2) for (x = cx * cs; x < xE; x += 2) { hd[D[y * W + x]]++; nn++; }
+      var ac = 0, q97 = 0;
+      for (v = 200; v >= 0; v--) { ac += hd[v]; if (ac >= nn * 0.03) { q97 = v; break; } }
+      lineDark.push(q97);
+    }
+    var dBold = lineDark.length ? median(lineDark) / 200 : 0.3;
+    var thr = dBold * 1.2 + 0.06; thr = thr < 0.14 ? 0.14 : thr > 0.6 ? 0.6 : thr;
+    var tHi = Math.round(thr * 200), tLo = Math.round(thr * 0.62 * 200);
+    var ink = new Uint8Array(N), inkCount = 0;
+    for (y = 1; y < H - 1; y++) for (x = 1; x < W - 1; x++) {
+      var k2 = y * W + x, dk = D[k2];
+      if (dk < tLo) continue;
+      if (dk >= tHi || D[k2 - 1] >= tHi || D[k2 + 1] >= tHi || D[k2 - W] >= tHi || D[k2 + W] >= tHi ||
+          D[k2 - W - 1] >= tHi || D[k2 - W + 1] >= tHi || D[k2 + W - 1] >= tHi || D[k2 + W + 1] >= tHi) { ink[k2] = 1; inkCount++; }
+    }
+    var hg = new Uint32Array(201), ng = 0;
+    for (y = 2; y < H - 2; y += 2) {
+      var fy3 = ((y / f) | 0) * FW;
+      for (x = 2; x < W - 2; x += 2) {
+        if (!keep[fy3 + ((x / f) | 0)]) continue;
+        var k3 = y * W + x, gh = Math.abs(D[k3 + 1] - D[k3 - 1]), gv = Math.abs(D[k3 + W] - D[k3 - W]);
+        hg[gh > gv ? gh : gv]++; ng++;
+      }
+    }
+    var ag = 0, sharp = 0;
+    for (v = 200; v >= 0; v--) { ag += hg[v]; if (ag >= ng * 0.002) { sharp = v / 200; break; } }
+    result.stats.sharp = sharp;
+    result.stats.dBold = dBold; result.stats.thr = thr;
+    result.stats.inkFrac = inkCount / (keepCells * f * f);
+    /* no coloured grid and nearly half the picture counts as dark marks: lettering cannot be singled out */
+    if (plain && result.stats.inkFrac > 0.4) { result.noText = true; return finish(); }
+
+
+    /* ---------- 8. connected components ---------- */
+    var comps = label(ink, W, H);
+
+    /* ---------- 8b. the waveform rows: what lies beyond them (header, footer) is cut away ---------- */
+    result.trace = opt.noTrim ? null : traceRows(comps, bbox, W, H);
+    if (result.trace) {                                      // cells beyond the outer rows are dropped from "keep", like the margin
+      var tr = result.trace, nx0 = FW, ny0 = FH, nx1 = -1, ny1 = -1;
+      for (y = 0; y < FH; y++) for (x = 0; x < FW; x++) {
+        var ck = y * FW + x; if (!keep[ck]) continue;
+        var uu = (x + 0.5) * f * tr.ax + (y + 0.5) * f * tr.ay;
+        if (uu < tr.lo || uu > tr.hi) { keep[ck] = 0; continue; }
+        if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y;
+      }
+      bbox = { x0: nx0 * f, y0: ny0 * f, x1: Math.min(W, (nx1 + 1) * f), y1: Math.min(H, (ny1 + 1) * f) };
+      result.grid.bbox = bbox;
+    }
+
+    /* ---------- 9. character-like candidates ---------- */
+    var kw = bbox.x1 - bbox.x0, kh = bbox.y1 - bbox.y0;
+    var sMax = Math.max(28, 0.08 * Math.min(kw, kh));
+    var cands = [], bars = [];
+    for (i = 0; i < comps.length; i++) {
+      var c2 = comps[i], cw = c2.x1 - c2.x0 + 1, ch = c2.y1 - c2.y0 + 1, sz = Math.max(cw, ch);
+      if (c2.area < 6 || sz < 5) continue;
+      if (sz <= sMax) { cands.push({ x0: c2.x0, y0: c2.y0, x1: c2.x1 + 1, y1: c2.y1 + 1, w: cw, h: ch, s: sz, area: c2.area }); continue; }
+      /* wider than a character: letters blurred into one solid blob. A trace is thinner,
+         much longer for its height, or leaves most of its bounding box empty. */
+      var thin = Math.min(cw, ch), fillc = c2.area / (cw * ch);
+      if (thin >= 10 && thin <= sMax && sz >= 2 * thin && sz <= 15 * thin && fillc >= 0.55)
+        bars.push({ x0: c2.x0, y0: c2.y0, x1: c2.x1 + 1, y1: c2.y1 + 1, area: c2.area, sizes: [thin], vertical: ch > cw });
+    }
+    result.stats.components = comps.length; result.stats.candidates = cands.length;
+
+    function outsideFrac(bx) {
+      var tot = 0, out = 0;
+      var fx0 = Math.max(0, (bx.x0 / f) | 0), fx1 = Math.min(FW - 1, ((bx.x1 - 1) / f) | 0);
+      var fy0 = Math.max(0, (bx.y0 / f) | 0), fy1 = Math.min(FH - 1, ((bx.y1 - 1) / f) | 0);
+      for (var yy2 = fy0; yy2 <= fy1; yy2++) for (var xx2 = fx0; xx2 <= fx1; xx2++) { tot++; if (!keep[yy2 * FW + xx2]) out++; }
+      return tot ? out / tot : 1;
+    }
+
+    var boxes = [], labels = [];
+
+    /* things lying on the grid that are not grid (ID stickers, notes): cover them whole */
+    (function () {
+      var seen = new Uint8Array(FN), stack = [];
+      for (var s0 = 0; s0 < FN; s0++) {
+        if (!holeMask[s0] || seen[s0]) continue;
+        var hx0 = FW, hy0 = FH, hx1 = -1, hy1 = -1, cells = 0, blank = 0;
+        stack.push(s0); seen[s0] = 1;
+        while (stack.length) {
+          var kq = stack.pop(), qx = kq % FW, qy = (kq / FW) | 0; cells++; blank += fBlank[kq];
+          if (qx < hx0) hx0 = qx; if (qx > hx1) hx1 = qx; if (qy < hy0) hy0 = qy; if (qy > hy1) hy1 = qy;
+          if (qx > 0 && holeMask[kq - 1] && !seen[kq - 1]) { seen[kq - 1] = 1; stack.push(kq - 1); }
+          if (qx < FW - 1 && holeMask[kq + 1] && !seen[kq + 1]) { seen[kq + 1] = 1; stack.push(kq + 1); }
+          if (qy > 0 && holeMask[kq - FW] && !seen[kq - FW]) { seen[kq - FW] = 1; stack.push(kq - FW); }
+          if (qy < FH - 1 && holeMask[kq + FW] && !seen[kq + FW]) { seen[kq + FW] = 1; stack.push(kq + FW); }
+        }
+        if (cells >= 12 && blank >= 0.4 * cells) {
+          var ox0 = Math.max(0, (hx0 - 1) * f), oy0 = Math.max(0, (hy0 - 1) * f);
+          var ox1 = Math.min(W, (hx1 + 2) * f), oy1 = Math.min(H, (hy1 + 2) * f);
+          boxes.push({ x: ox0, y: oy0, w: ox1 - ox0, h: oy1 - oy0, kind: 'object' });
+        }
+      }
+    })();
+
+    function runPass(vertical) {
+      var groups = groupPass(cands, vertical, sMax);
+      var longs = [], shorts = [];
+      groups.forEach(function (g) {
+        var along = vertical ? g.y1 - g.y0 : g.x1 - g.x0;
+        var across = vertical ? g.x1 - g.x0 : g.y1 - g.y0;
+        var med = median(g.sizes), hc = Math.min(med, across);
+        var fill = g.area / Math.max(1, (g.x1 - g.x0) * (g.y1 - g.y0));
+        g.hc = Math.max(hc, 5); g.fill = fill; g.n = g.sizes.length;
+        g.out = outsideFrac(g);
+        var isLong = false;
+        if (across >= 6 && fill >= 0.06) {
+          if (g.n >= 3 && along >= 2.8 * hc) isLong = true;
+          else if (across >= 10 && fill >= 0.3 && along >= 3.5 * across) isLong = true;
+        }
+        (isLong ? longs : shorts).push(g);
+      });
+      bars.forEach(function (g) {
+        if (g.vertical !== vertical) return;
+        g.hc = g.sizes[0]; g.out = outsideFrac(g); longs.push(g);
+      });
+      /* text hanging over the edge of the grid is trimmed with the margin, not reported */
+      longs.forEach(function (g) { boxes.push(mk(g, g.out >= 0.25 ? 'edge' : 'text')); });
+      shorts.forEach(function (g) {
+        if (g.out >= 0.25) { if (!vertical) boxes.push(mk(g, 'edge')); return; }
+        var hit = false;
+        for (var j = 0; j < longs.length && !hit; j++) {
+          var Lg = longs[j]; if (Lg.out >= 0.25) continue;
+          var hr = Math.min(Lg.hc, 28), ha = 5 * hr, hb = 1.2 * hr;
+          var ex0 = Lg.x0 - (vertical ? hb : ha), ex1 = Lg.x1 + (vertical ? hb : ha);
+          var ey0 = Lg.y0 - (vertical ? ha : hb), ey1 = Lg.y1 + (vertical ? ha : hb);
+          if (g.x0 < ex1 && g.x1 > ex0 && g.y0 < ey1 && g.y1 > ey0) hit = true;
+        }
+        if (hit) boxes.push(mk(g, 'adjacent'));
+        else if (!vertical && Math.max(g.x1 - g.x0, g.y1 - g.y0) >= 8) labels.push({ x: g.x0, y: g.y0, w: g.x1 - g.x0, h: g.y1 - g.y0 });
+      });
+    }
+    function mk(g, kind) {
+      var pad = Math.round(0.45 * g.hc) + 2;
+      var bx0 = Math.max(0, g.x0 - pad), by0 = Math.max(0, g.y0 - pad);
+      var bx1 = Math.min(W, g.x1 + pad), by1 = Math.min(H, g.y1 + pad);
+      return { x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0, kind: kind };
+    }
+    runPass(false); runPass(true);
+
+    var det = boxes.filter(function (b4) { return b4.kind !== 'edge'; });
+    var edges = boxes.filter(function (b4) { return b4.kind === 'edge'; });
+    var rank = { object: 4, text: 3, adjacent: 2 };
+    function union(A, B) {
+      var nx = Math.min(A.x, B.x), ny = Math.min(A.y, B.y);
+      return { x: nx, y: ny, w: Math.max(A.x + A.w, B.x + B.w) - nx, h: Math.max(A.y + A.h, B.y + B.h) - ny,
+               kind: rank[A.kind] >= rank[B.kind] ? A.kind : B.kind };
+    }
+    function mergeWhere(test) {
+      var again = true;
+      while (again) {
+        again = false;
+        for (var ia = 0; ia < det.length && !again; ia++) for (var ib = ia + 1; ib < det.length && !again; ib++) {
+          if (test(det[ia], det[ib])) { det[ia] = union(det[ia], det[ib]); det.splice(ib, 1); again = true; }
+        }
+      }
+    }
+    function overlapping(A, B) {
+      var iw = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x), ih = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
+      return iw > 0 && ih > 0 && iw * ih >= 0.3 * Math.min(A.w * A.h, B.w * B.h);
+    }
+    function inkFrac(x0, y0, x1, y1) {
+      x0 = Math.max(0, x0 | 0); y0 = Math.max(0, y0 | 0); x1 = Math.min(W, x1 | 0); y1 = Math.min(H, y1 | 0);
+      if (x1 <= x0 || y1 <= y0) return 0;
+      var cnt = 0; for (var yy3 = y0; yy3 < y1; yy3++) for (var xx3 = x0, kk3 = yy3 * W + x0; xx3 < x1; xx3++, kk3++) cnt += ink[kk3];
+      return cnt / ((x1 - x0) * (y1 - y0));
+    }
+    mergeWhere(overlapping);
+    /* lettering that touches the trace joins the trace's blob and is not seen as lettering:
+       keep extending a text box along its line while the next stretch is still dense with ink */
+    det.forEach(function (bx) {
+      if (bx.kind === 'object') return;
+      var horiz = bx.w >= 0.8 * bx.h, step = horiz ? bx.h : bx.w, n3;
+      for (n3 = 0; n3 < 6; n3++) {
+        if (horiz) { if (inkFrac(bx.x - step, bx.y, bx.x, bx.y + bx.h) < 0.15) break; bx.x = Math.max(0, bx.x - step); bx.w += step; }
+        else { if (inkFrac(bx.x, bx.y - step, bx.x + bx.w, bx.y) < 0.15) break; bx.y = Math.max(0, bx.y - step); bx.h += step; }
+      }
+      for (n3 = 0; n3 < 6; n3++) {
+        if (horiz) { if (inkFrac(bx.x + bx.w, bx.y, bx.x + bx.w + step, bx.y + bx.h) < 0.15) break; bx.w = Math.min(W - bx.x, bx.w + step); }
+        else { if (inkFrac(bx.x, bx.y + bx.h, bx.x + bx.w, bx.y + bx.h + step) < 0.15) break; bx.h = Math.min(H - bx.y, bx.h + step); }
+      }
+    });
+    /* two detections on one line with a short gap between them: cover the gap too */
+    mergeWhere(function (A, B) {
+      var oy = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y), ox = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x);
+      if (A.w >= 0.8 * A.h && B.w >= 0.8 * B.h && oy >= 0.5 * Math.min(A.h, B.h) && -ox <= 4 * Math.min(A.h, B.h)) return true;
+      if (A.h >= 0.8 * A.w && B.h >= 0.8 * B.w && ox >= 0.5 * Math.min(A.w, B.w) && -oy <= 4 * Math.min(A.w, B.w)) return true;
+      return false;
+    });
+    mergeWhere(overlapping);
+    var out = det.concat(edges);
+    result.boxes = out;
+    result.labels = labels.filter(function (lb2) {
+      var cxl = lb2.x + lb2.w / 2, cyl = lb2.y + lb2.h / 2;
+      return !det.some(function (o) { return cxl >= o.x && cxl <= o.x + o.w && cyl >= o.y && cyl <= o.y + o.h; });
+    });
+    return finish();
+
+    /* Without a coloured grid, also look for light lettering on a dark ground (a monitor screen):
+       run once more on the negative and add what that finds. */
+    function finish() {
+      if (plain && !opt.single) {
+        var neg = new Uint8ClampedArray(rgba.length);
+        for (var q2 = 0; q2 < rgba.length; q2 += 4) { neg[q2] = 255 - rgba[q2]; neg[q2 + 1] = 255 - rgba[q2 + 1]; neg[q2 + 2] = 255 - rgba[q2 + 2]; neg[q2 + 3] = 255; }
+        var r2 = analyze(neg, W, H, { forcePlain: true, single: true, noTrim: opt.noTrim });
+        if (!result.trace && r2.trace) { result.trace = r2.trace; result.grid.bbox = r2.grid.bbox; result.keep = r2.keep; }   // bright traces on a dark screen
+        r2.boxes.forEach(function (b6) {
+          var inside = result.boxes.some(function (o) { return b6.x >= o.x && b6.y >= o.y && b6.x + b6.w <= o.x + o.w && b6.y + b6.h <= o.y + o.h; });
+          if (!inside) result.boxes.push(b6);
+        });
+        result.noText = !!result.noText && !!r2.noText;
+        if (r2.stats.sharp > (result.stats.sharp || 0)) result.stats.sharp = r2.stats.sharp;
+      }
+      result.stats.ms = Date.now() - t0;
+      return result;
+    }
+  }
+
+  /* ---------- helpers ---------- */
+  function blur3(rgba, ch, gain, W, H) {            // 3x3 box mean of one channel, gain applied
+    var N = W * H, tmp = new Uint16Array(N), out = new Uint8Array(N), x, y, k;
+    for (y = 0; y < H; y++) {
+      var row = y * W;
+      for (x = 0; x < W; x++) {
+        k = row + x;
+        var a = rgba[(k - (x > 0 ? 1 : 0)) * 4 + ch], b = rgba[k * 4 + ch], c = rgba[(k + (x < W - 1 ? 1 : 0)) * 4 + ch];
+        tmp[k] = a + b + c;
+      }
+    }
+    var g9 = gain / 9;
+    for (y = 0; y < H; y++) {
+      var up = (y > 0 ? y - 1 : y) * W, mid = y * W, dn = (y < H - 1 ? y + 1 : y) * W;
+      for (x = 0; x < W; x++) {
+        var v = (tmp[up + x] + tmp[mid + x] + tmp[dn + x]) * g9;
+        out[mid + x] = v > 255 ? 255 : v;
+      }
+    }
+    return out;
+  }
+
+  function median(arr) {
+    var s = arr.slice().sort(function (a, b) { return a - b; }), n = s.length;
+    return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+  }
+
+  /* A 12-lead printout: the traces are the long, sparse components. Their rows bound the part worth keeping;
+     names and IDs are printed above or below. The sheet may be tilted or sideways in the photo, so the rows
+     are measured along the direction the traces run in. Returns null unless at least two rows are found,
+     so a single strip or a screen is left alone. Result: { rows, ax, ay, lo, hi } = keep lo <= x*ax + y*ay <= hi. */
+  function traceRows(comps, bb, W, H) {
+    var gw = bb.x1 - bb.x0, gh = bb.y1 - bb.y0, full = Math.max(gw, gh), i, c;
+    var longish = [];
+    for (i = 0; i < comps.length; i++) {
+      c = comps[i];
+      var cw = c.x1 - c.x0 + 1, ch = c.y1 - c.y0 + 1;
+      if (Math.max(cw, ch) < 0.04 * full || Math.min(cw, ch) < 4 || c.area / (cw * ch) > 0.3) continue;   // short, or solid (lettering, a sticker)
+      if (cw > 0.9 * gw && ch > 0.9 * gh) continue;                                                     // the whole sheet in one piece (a black grid)
+      longish.push(i);
+    }
+    if (longish.length < 2) return null;
+    /* the direction the traces run in: area-weighted mean of the principal axes (doubled angles, so 89° and -89° agree) */
+    var cs = 0, sn = 0;
+    longish.forEach(function (ix) {
+      c = comps[ix]; var n = c.area, mx = c.sx / n, my = c.sy / n;
+      var vxx = c.sxx / n - mx * mx, vyy = c.syy / n - my * my, vxy = c.sxy / n - mx * my;
+      var th2 = Math.atan2(2 * vxy, vxx - vyy);                     // twice the axis angle
+      cs += n * Math.cos(th2); sn += n * Math.sin(th2);
+    });
+    var th = 0.5 * Math.atan2(sn, cs), vx = Math.cos(th), vy = Math.sin(th), ax = -vy, ay = vx;   // v: along the rows, a: across them
+    /* extents of each longish component along and across the rows, from its pixels */
+    var lab = comps.lab, idx = new Int32Array(comps.length + 1), ext = [];
+    longish.forEach(function (ix, j) { idx[ix + 1] = j + 1; ext.push({ u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity, ix: ix }); });
+    for (var y = 0; y < H; y++) for (var x = 0, k = y * W; x < W; x++, k++) {
+      var l = lab[k]; if (!l) continue; var j = idx[l]; if (!j) continue;
+      var e = ext[j - 1], u = x * ax + y * ay, v = x * vx + y * vy;
+      if (u < e.u0) e.u0 = u; if (u > e.u1) e.u1 = u; if (v < e.v0) e.v0 = v; if (v > e.v1) e.v1 = v;
+    }
+    var along = Math.abs(gw * vx) + Math.abs(gh * vy);                   // the sheet's extent along the rows
+    var bands = [];
+    ext.filter(function (e) { return e.v1 - e.v0 >= 0.08 * along; }).sort(function (p, q) { return p.u0 - q.u0; }).forEach(function (e) {
+      var last = bands[bands.length - 1];
+      if (last && e.u0 <= last[1]) last[1] = Math.max(last[1], e.u1); else bands.push([e.u0, e.u1]);
+    });
+    if (bands.length < 2) return null;
+    var lo = bands[0][0], hi = bands[bands.length - 1][1], pitch = (hi - lo) / bands.length;
+    if (hi - lo < 0.3 * (Math.abs(gw * ax) + Math.abs(gh * ay))) return null;
+    /* shorter pieces just beyond the outer rows (a faint or broken trace) widen the kept part rather than being lost */
+    ext.forEach(function (e) {
+      if (e.u1 > lo - pitch && e.u0 < lo) lo = e.u0;
+      if (e.u0 < hi + pitch && e.u1 > hi) hi = e.u1;
+    });
+    var pad = Math.max(12, 0.25 * pitch);
+    return { rows: bands.length, ax: ax, ay: ay, lo: lo - pad, hi: hi + pad, angle: th * 180 / Math.PI };
+  }
+  function groupPass(cands, vertical, sMax) {
+    var n = cands.length, idx = new Array(n), i, j;
+    for (i = 0; i < n; i++) idx[i] = i;
+    function a0(c) { return vertical ? c.y0 : c.x0; } function a1(c) { return vertical ? c.y1 : c.x1; }
+    function b0(c) { return vertical ? c.x0 : c.y0; } function b1(c) { return vertical ? c.x1 : c.y1; }
+    idx.sort(function (p, q) { return a0(cands[p]) - a0(cands[q]); });
+    var par = new Int32Array(n); for (i = 0; i < n; i++) par[i] = i;
+    function find(k) { while (par[k] !== k) { par[k] = par[par[k]]; k = par[k]; } return k; }
+    for (i = 0; i < n; i++) {
+      var ci = cands[idx[i]];
+      for (j = i + 1; j < n; j++) {
+        var cj = cands[idx[j]];
+        if (a0(cj) > a1(ci) + sMax) break;
+        var big = Math.max(ci.s, cj.s), small = Math.min(ci.s, cj.s);
+        if (big > 4 * small) continue;
+        if (a0(cj) - a1(ci) > Math.max(4, 1.2 * small)) continue;
+        var ov = Math.min(b1(ci), b1(cj)) - Math.max(b0(ci), b0(cj));
+        var mb = Math.min(b1(ci) - b0(ci), b1(cj) - b0(cj));
+        if (ov < 0.3 * mb) continue;
+        var ra = find(idx[i]), rb = find(idx[j]); if (ra !== rb) par[ra] = rb;
+      }
+    }
+    var map = {}, groups = [];
+    for (i = 0; i < n; i++) {
+      var r = find(i), g = map[r], c = cands[i];
+      if (!g) { g = map[r] = { x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1, area: 0, sizes: [] }; groups.push(g); }
+      if (c.x0 < g.x0) g.x0 = c.x0; if (c.y0 < g.y0) g.y0 = c.y0;
+      if (c.x1 > g.x1) g.x1 = c.x1; if (c.y1 > g.y1) g.y1 = c.y1;
+      g.area += c.area; g.sizes.push(c.s);
+    }
+    return groups;
+  }
+
+  function label(ink, W, H) {
+    var lab = new Int32Array(W * H), par = new Int32Array(((W * H) >> 1) + 2), next = 1, x, y;
+    function find(k) { while (par[k] !== k) { par[k] = par[par[k]]; k = par[k]; } return k; }
+    for (y = 0; y < H; y++) {
+      var row = y * W;
+      for (x = 0; x < W; x++) {
+        if (!ink[row + x]) continue;
+        var best = 0, nb, k;
+        if (x > 0 && (nb = lab[row + x - 1])) best = nb;
+        if (y > 0) {
+          var up = row - W;
+          for (var dx = -1; dx <= 1; dx++) {
+            var xx = x + dx; if (xx < 0 || xx >= W) continue;
+            nb = lab[up + xx]; if (!nb) continue;
+            if (!best) best = nb;
+            else if (nb !== best) { var ra = find(best), rb = find(nb); if (ra !== rb) { if (ra < rb) par[rb] = ra; else par[ra] = rb; } }
+          }
+        }
+        if (!best) { best = next; par[next] = next; next++; }
+        lab[row + x] = best;
+      }
+    }
+    var id = new Int32Array(next), comps = [];
+    for (y = 0; y < H; y++) {
+      var row2 = y * W;
+      for (x = 0; x < W; x++) {
+        var l = lab[row2 + x]; if (!l) continue;
+        var r = find(l), ci = id[r];
+        if (!ci) { comps.push({ x0: x, y0: y, x1: x, y1: y, area: 0, sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0 }); ci = id[r] = comps.length; }
+        var c = comps[ci - 1];
+        if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y > c.y1) c.y1 = y; c.area++;
+        c.sx += x; c.sy += y; c.sxx += x * x; c.syy += y * y; c.sxy += x * y;       // moments: the direction a long component runs in
+        lab[row2 + x] = ci;
+      }
+    }
+    comps.lab = lab;                                           // pixel -> 1-based index into comps
+    return comps;
+  }
+
+  function largestComponent(mask, W, H) {
+    var seen = new Int32Array(W * H), best = 0, bestId = 0, id = 0, stack = [];
+    for (var i = 0; i < W * H; i++) {
+      if (!mask[i] || seen[i]) continue;
+      id++; var n = 0; stack.push(i); seen[i] = id;
+      while (stack.length) {
+        var k = stack.pop(), x = k % W, y = (k / W) | 0; n++;
+        if (x > 0 && mask[k - 1] && !seen[k - 1]) { seen[k - 1] = id; stack.push(k - 1); }
+        if (x < W - 1 && mask[k + 1] && !seen[k + 1]) { seen[k + 1] = id; stack.push(k + 1); }
+        if (y > 0 && mask[k - W] && !seen[k - W]) { seen[k - W] = id; stack.push(k - W); }
+        if (y < H - 1 && mask[k + W] && !seen[k + W]) { seen[k + W] = id; stack.push(k + W); }
+      }
+      if (n > best) { best = n; bestId = id; }
+    }
+    var out = new Uint8Array(W * H);
+    if (bestId) for (i = 0; i < W * H; i++) if (seen[i] === bestId) out[i] = 1;
+    return out;
+  }
+
+  function dilate(mask, W, H, r) {
+    var tmp = new Uint8Array(W * H), out = new Uint8Array(W * H), x, y, d;
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      var v = 0; for (d = -r; d <= r && !v; d++) { var xx = x + d; if (xx >= 0 && xx < W && mask[y * W + xx]) v = 1; }
+      tmp[y * W + x] = v;
+    }
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      var v2 = 0; for (d = -r; d <= r && !v2; d++) { var yy = y + d; if (yy >= 0 && yy < H && tmp[yy * W + x]) v2 = 1; }
+      out[y * W + x] = v2;
+    }
+    return out;
+  }
+  function erode(mask, W, H, r) {            // outside the image counts as set
+    var tmp = new Uint8Array(W * H), out = new Uint8Array(W * H), x, y, d;
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      var v = 1; for (d = -r; d <= r && v; d++) { var xx = x + d; if (xx >= 0 && xx < W && !mask[y * W + xx]) v = 0; }
+      tmp[y * W + x] = v;
+    }
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      var v2 = 1; for (d = -r; d <= r && v2; d++) { var yy = y + d; if (yy >= 0 && yy < H && !tmp[yy * W + x]) v2 = 0; }
+      out[y * W + x] = v2;
+    }
+    return out;
+  }
+  function fillHoles(mask, W, H) {
+    var out = new Uint8Array(W * H).fill(1), stack = [], i, x, y;
+    function push(k) { if (!mask[k] && out[k]) { out[k] = 0; stack.push(k); } }
+    for (x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+    for (y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+    while (stack.length) {
+      i = stack.pop(); x = i % W; y = (i / W) | 0;
+      if (x > 0) push(i - 1); if (x < W - 1) push(i + 1); if (y > 0) push(i - W); if (y < H - 1) push(i + W);
+    }
+    return out;
+  }
+
+  root.ECGAnon = { analyze: analyze };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+/* Synthetic 12-lead ECG printouts with fictitious identifiers, for trying the checker
+   without any real patient data. drawSample(variant) -> { canvas, truth:[{x,y,w,h}] } */
+(function (root) {
+  'use strict';
+  var MM = 6.5;                                   // px per mm
+  var FONT = '"Hiragino Sans","Yu Gothic","Meiryo","Noto Sans JP","Noto Sans CJK JP",sans-serif';
+  var LEADS = {
+    'I':   [0.10, -0.03, 0.55, -0.08, 0.18], 'II':  [0.14, -0.05, 0.95, -0.12, 0.28],
+    'III': [0.06, -0.03, 0.45, -0.10, 0.12], 'aVR': [-0.11, 0.04, -0.75, 0.10, -0.22],
+    'aVL': [0.04, -0.03, 0.22, -0.05, 0.07], 'aVF': [0.10, -0.04, 0.70, -0.10, 0.20],
+    'V1':  [0.06, 0, 0.22, -0.95, 0.10],     'V2':  [0.07, 0, 0.45, -1.30, 0.35],
+    'V3':  [0.08, -0.02, 0.85, -0.90, 0.40], 'V4':  [0.09, -0.06, 1.35, -0.45, 0.38],
+    'V5':  [0.09, -0.08, 1.20, -0.20, 0.30], 'V6':  [0.09, -0.07, 0.90, -0.10, 0.24]
+  };
+  function g(t, c, s) { var z = (t - c) / s; return Math.exp(-0.5 * z * z); }
+  var ST = null;                                   // optional per-lead ST shift in mV, for the comparison example
+  function mv(lead, t) {                           // t in seconds, RR 0.83 s
+    var a = LEADS[lead], rr = 0.83, ph = ((t + 0.3) % rr) - 0.3;
+    return a[0] * g(ph, -0.17, 0.025) + a[1] * g(ph, -0.028, 0.008) + a[2] * g(ph, 0, 0.011) +
+           a[3] * g(ph, 0.03, 0.011) + a[4] * g(ph, 0.27, 0.055) + (ST && ST[lead] ? ST[lead] * g(ph, 0.14, 0.07) : 0);
+  }
+
+  function drawPage(variant, o) {
+    o = o || {}; ST = o.st || null;
+    var W = Math.round(297 * MM), H = Math.round(210 * MM);
+    var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var c = cv.getContext('2d'), truth = [];
+    c.fillStyle = '#fdfdfb'; c.fillRect(0, 0, W, H);
+    var gx = 20 * MM, gy = 32 * MM, gw = 257 * MM, gh = 160 * MM;
+    if (variant === 'ingrid') { gy = 14 * MM; gh = 182 * MM; }
+
+    /* grid */
+    c.fillStyle = o.paper || '#fffaf8'; c.fillRect(gx, gy, gw, gh);
+    for (var i = 0; i <= gw / MM + 0.01; i++) {
+      var bold = i % 5 === 0; c.strokeStyle = bold ? (o.bold || '#ee8f8f') : (o.fine || '#f6c3c0'); c.lineWidth = bold ? 1.7 : 1;
+      var x = Math.round(gx + i * MM) + 0.5; c.beginPath(); c.moveTo(x, gy); c.lineTo(x, gy + gh); c.stroke();
+    }
+    for (i = 0; i <= gh / MM + 0.01; i++) {
+      var bold2 = i % 5 === 0; c.strokeStyle = bold2 ? (o.bold || '#ee8f8f') : (o.fine || '#f6c3c0'); c.lineWidth = bold2 ? 1.7 : 1;
+      var y = Math.round(gy + i * MM) + 0.5; c.beginPath(); c.moveTo(gx, y); c.lineTo(gx + gw, y); c.stroke();
+    }
+
+    /* waveforms: 3 rows x 4 columns (2.5 s each) + rhythm strip */
+    var top = variant === 'ingrid' ? gy + 26 * MM : gy + 5 * MM;
+    var rowH = 38 * MM, layout = [['I', 'aVR', 'V1', 'V4'], ['II', 'aVL', 'V2', 'V5'], ['III', 'aVF', 'V3', 'V6']];
+    var INK = o.ink || '#141414';
+    c.strokeStyle = INK; c.lineWidth = o.lw || 2.2; c.lineJoin = 'round'; c.fillStyle = INK;
+    function trace(lead, x0, base, secs, t0) {
+      c.beginPath();
+      var n = Math.round(secs * 25 * MM);
+      for (var k = 0; k <= n; k++) {
+        var t = t0 + k / (25 * MM), yy = base - (mv(lead, t) + (o.tremor ? 0.12 * Math.sin(t * 314) + 0.05 * Math.sin(t * 733 + 1) : 0)) * 10 * MM;
+        if (k === 0) c.moveTo(x0, yy); else c.lineTo(x0 + k, yy);
+      }
+      c.stroke();
+    }
+    function cal(x0, base) {
+      c.beginPath(); c.moveTo(x0, base); c.lineTo(x0 + 1 * MM, base); c.lineTo(x0 + 1 * MM, base - 10 * MM);
+      c.lineTo(x0 + 4 * MM, base - 10 * MM); c.lineTo(x0 + 4 * MM, base); c.lineTo(x0 + 5 * MM, base); c.stroke();
+    }
+    c.font = 'bold ' + Math.round(3.4 * MM) + 'px ' + FONT; c.textBaseline = 'alphabetic';
+    for (var r = 0; r < 3; r++) {
+      var base = top + r * rowH + 22 * MM; cal(gx + 1 * MM, base);
+      for (var q = 0; q < 4; q++) {
+        var x0 = gx + 6 * MM + q * 62.5 * MM;
+        trace(layout[r][q], x0, base, 2.5, q * 2.5);
+        c.fillText(layout[r][q], x0 + 1.5 * MM, base - 14 * MM);
+      }
+    }
+    var rb = top + 3 * rowH + 16 * MM; cal(gx + 1 * MM, rb); trace('II', gx + 6 * MM, rb, 10, 0);
+    c.fillText('II', gx + 7.5 * MM, rb - 12 * MM);
+
+    /* text helpers */
+    function text(str, x, y, mm, phi, weight) {
+      c.font = (weight || 'normal') + ' ' + Math.round(mm * MM) + 'px ' + FONT; c.fillStyle = INK;
+      c.fillText(str, x, y);
+      if (phi) { var w = c.measureText(str).width; truth.push({ x: x, y: y - mm * MM, w: w, h: mm * MM * 1.25 }); }
+    }
+    var setting = '25mm/s  10mm/mV  0.5-150Hz  AC50Hz';
+    if (variant === 'clean') {
+      text(setting, gx, gy + gh + 6 * MM, 3.0, false);
+    } else if (variant === 'margin') {
+      text('ID: 99999999', gx, 13 * MM, 4.2, true, 'bold');
+      text('氏名: 見本 太郎 様', gx + 62 * MM, 13 * MM, 4.2, true, 'bold');
+      text('1950/01/23 生  76歳  男', gx + 140 * MM, 13 * MM, 3.6, true);
+      text('2026/10/11 14:32  4階東病棟', gx, 22 * MM, 3.6, true);
+      text('HR 72  PR 164ms  QRS 92ms  QT/QTc 388/412ms', gx + 100 * MM, 22 * MM, 3.4, false);
+      text(setting, gx, gy + gh + 6 * MM, 3.0, false);
+    } else if (variant === 'ingrid') {
+      text('ID: 99999999', gx + 4 * MM, gy + 8 * MM, 4.0, true, 'bold');
+      text('見本 花子', gx + 58 * MM, gy + 8 * MM, 4.0, true, 'bold');
+      text('1948/05/06  78歳  女', gx + 100 * MM, gy + 8 * MM, 3.5, true);
+      text('2026/10/11 09:05', gx + 4 * MM, gy + 15 * MM, 3.5, true);
+      text('洞調律  正常範囲', gx + 170 * MM, gy + 8 * MM, 3.5, false);
+      text('HR 72  PR 164ms  QRS 92ms', gx + 170 * MM, gy + 15 * MM, 3.3, false);
+      text(setting, gx + 4 * MM, gy + gh - 3 * MM, 3.0, false);
+    }
+    (o.extra || []).forEach(function (e) {
+      var keepInk = INK; if (e.color) INK = e.color;
+      text(e.t, gx + e.x * MM, gy + e.y * MM, e.mm, e.phi !== false, e.weight); INK = keepInk;
+    });
+    ST = null;
+    return { canvas: cv, truth: truth, grid: { x: Math.round(gx), y: Math.round(gy), w: Math.round(gw), h: Math.round(gh) } };
+  }
+
+  /* variant "photo": the margin page shot at an angle on a desk, with an ID sticker on the grid */
+  function drawPhoto() {
+    var page = drawPage('margin'), pc = page.canvas, pctx = pc.getContext('2d');
+    var lx = 196 * MM, ly = 150 * MM, lw = 60 * MM, lh = 24 * MM;       // patient label sticker
+    pctx.fillStyle = '#ffffff'; pctx.fillRect(lx, ly, lw, lh);
+    pctx.strokeStyle = '#9a9a9a'; pctx.lineWidth = 1; pctx.strokeRect(lx + 0.5, ly + 0.5, lw, lh);
+    pctx.fillStyle = '#141414';
+    var bx = lx + 4 * MM, seed = 7;
+    while (bx < lx + lw - 5 * MM) {
+      seed = (seed * 73 + 19) % 101; var bw = 1 + (seed % 3); pctx.fillRect(Math.round(bx), ly + 3 * MM, bw, 8 * MM); bx += bw + 1.5 + (seed % 4);
+    }
+    pctx.font = 'bold ' + Math.round(3.6 * MM) + 'px ' + FONT;
+    pctx.fillText('99999999  ミホン タロウ', lx + 4 * MM, ly + 17 * MM);
+    pctx.font = Math.round(3.0 * MM) + 'px ' + FONT; pctx.fillText('S25.01.23  男', lx + 4 * MM, ly + 22 * MM);
+
+    var W = 2000, H = 1500, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var c = cv.getContext('2d');
+    var wood = c.createLinearGradient(0, 0, W, H); wood.addColorStop(0, '#6f5a47'); wood.addColorStop(1, '#4e3f33');
+    c.fillStyle = wood; c.fillRect(0, 0, W, H);
+    c.save();
+    c.translate(W / 2, H / 2); c.rotate(-5.5 * Math.PI / 180); c.transform(1, 0, -0.06, 1, 0, 0);
+    var sc = 0.93; c.scale(sc, sc);
+    c.shadowColor = 'rgba(0,0,0,.45)'; c.shadowBlur = 30; c.shadowOffsetY = 10;
+    c.drawImage(pc, -pc.width / 2, -pc.height / 2 + 40);
+    c.restore();
+    var sh = c.createLinearGradient(0, 0, W, H);                         // uneven room light
+    sh.addColorStop(0, 'rgba(255,236,200,.10)'); sh.addColorStop(0.55, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(20,20,40,.30)');
+    c.fillStyle = sh; c.fillRect(0, 0, W, H);
+    return { canvas: cv, truth: [] };
+  }
+
+  root.ECGSample = {
+    draw: function (variant, o) { return variant === 'photo' ? drawPhoto() : drawPage(variant, o); }
+  };
+})(window);
+
+/* Image -> working canvas -> analysis -> composed output. Used by the UI and by tests.
+
+   Nothing inside the sheet is covered automatically. Names and IDs are not found in the middle of
+   the waveforms; they sit at the top or bottom of the sheet (at a side when the sheet was photographed
+   sideways) and, on a bedside monitor, in the top-left corner. Lettering found in those places is offered
+   to the user as "candidates"; the user decides what to cover, by pressing a candidate or by drawing. */
+(function (root) {
+  'use strict';
+  var MAX_DIM = 2000, PAINT = '#dfe1e4', MASK = '#15171a';
+  var ZONE = { top: 0.28, bottom: 0.20, side: 0.10, cornerW: 0.50, cornerH: 0.45 };   // fractions of the output picture
+  var MAX_CANDIDATES = 14;                        // more than this is noise, not lettering
+
+  function toWorkCanvas(src) {                    // src: canvas | ImageBitmap | HTMLImageElement
+    var sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
+    var k = Math.min(1, MAX_DIM / Math.max(sw, sh));
+    var cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(sw * k)); cv.height = Math.max(1, Math.round(sh * k));
+    var c = cv.getContext('2d', { willReadFrequently: true });
+    c.imageSmoothingQuality = 'high'; c.drawImage(src, 0, 0, cv.width, cv.height);
+    return cv;
+  }
+
+  function analyzeCanvas(work, opt) {
+    var c = work.getContext('2d', { willReadFrequently: true });
+    var img = c.getImageData(0, 0, work.width, work.height);
+    return root.ECGAnon.analyze(img.data, work.width, work.height, opt);
+  }
+
+  function isDetection(b) { return b.kind !== 'edge'; }
+
+  /* Can lettering be searched for in this picture at all? */
+  function searchable(an) {
+    if (!an.grid.found || an.noText) return false;
+    if (an.mode !== 'plain' && an.stats.inkFrac > 0.15) return false;     // grid lines and lettering cannot be told apart
+    return an.stats.sharp >= 0.18;                                        // out of focus: lettering is missed
+  }
+
+  function inZone(an, b) {
+    var bb = an.grid.bbox, W = bb.x1 - bb.x0, H = bb.y1 - bb.y0;
+    var fx = (b.x + b.w / 2 - bb.x0) / W, fy = (b.y + b.h / 2 - bb.y0) / H;
+    if (fy < ZONE.top || fy > 1 - ZONE.bottom || fx < ZONE.side || fx > 1 - ZONE.side) return true;
+    return an.mode === 'plain' && fx < ZONE.cornerW && fy < ZONE.cornerH;  // bedside monitor: patient details top-left
+  }
+
+  /* Lettering found where personal details turn up. Pieces lying close together (the lines of a header)
+     are joined into one block, so that one press covers the block. Coordinates are those of the work canvas. */
+  function candidates(an) {
+    if (!searchable(an)) return [];
+    var bb = an.grid.bbox, list = [];
+    an.boxes.forEach(function (b) {
+      if (!isDetection(b) || !inZone(an, b)) return;
+      var x0 = Math.max(bb.x0, b.x), y0 = Math.max(bb.y0, b.y), x1 = Math.min(bb.x1, b.x + b.w), y1 = Math.min(bb.y1, b.y + b.h);
+      if (x1 - x0 >= 4 && y1 - y0 >= 4) list.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    });
+    var again = true;
+    while (again) {
+      again = false;
+      for (var i = 0; i < list.length && !again; i++) for (var j = i + 1; j < list.length && !again; j++) {
+        var A = list[i], B = list[j], g = 0.9 * Math.min(Math.min(A.w, A.h), Math.min(B.w, B.h));
+        var gx = Math.max(A.x, B.x) - Math.min(A.x + A.w, B.x + B.w), gy = Math.max(A.y, B.y) - Math.min(A.y + A.h, B.y + B.h);
+        if (gx <= 2 * g && gy <= g) {
+          var nx = Math.min(A.x, B.x), ny = Math.min(A.y, B.y);
+          list[i] = { x: nx, y: ny, w: Math.max(A.x + A.w, B.x + B.w) - nx, h: Math.max(A.y + A.h, B.y + B.h) - ny };
+          list.splice(j, 1); again = true;
+        }
+      }
+    }
+    return list.length > MAX_CANDIDATES ? [] : list;
+  }
+
+  /* Output image: cropped to the sheet; what lies outside the grid, and lettering cut by its edge, painted flat;
+     the boxes the user chose covered in black. Pixels are re-rendered, so no EXIF survives. */
+  function compose(work, an, masks) {
+    var bb = an.grid.bbox, f = an.cell, x, y;
+    var out = document.createElement('canvas');
+    out.width = bb.x1 - bb.x0; out.height = bb.y1 - bb.y0;
+    var c = out.getContext('2d');
+    c.drawImage(work, -bb.x0, -bb.y0);
+    c.fillStyle = PAINT;
+    for (y = 0; y < an.FH; y++) {
+      var run = -1;
+      for (x = 0; x <= an.FW; x++) {
+        var off = x < an.FW && !an.keep[y * an.FW + x];
+        if (off && run < 0) run = x;
+        if (!off && run >= 0) { c.fillRect(run * f - bb.x0, y * f - bb.y0, (x - run) * f, f); run = -1; }
+      }
+    }
+    an.boxes.forEach(function (b) { if (!isDetection(b)) c.fillRect(b.x - bb.x0, b.y - bb.y0, b.w, b.h); });
+    c.fillStyle = MASK;
+    (masks || []).forEach(function (b) { c.fillRect(b.x - bb.x0, b.y - bb.y0, b.w, b.h); });
+    return out;
+  }
+
+  /* The photo as taken, with the part that is cut away dimmed. */
+  function review(work, an) {
+    var cv = document.createElement('canvas'); cv.width = work.width; cv.height = work.height;
+    var c = cv.getContext('2d'), f = an.cell, x, y;
+    c.drawImage(work, 0, 0);
+    if (!an.grid.found) return cv;
+    var bb = an.grid.bbox;
+    c.fillStyle = 'rgba(18,22,30,.62)';
+    c.fillRect(0, 0, cv.width, bb.y0); c.fillRect(0, bb.y1, cv.width, cv.height - bb.y1);
+    c.fillRect(0, bb.y0, bb.x0, bb.y1 - bb.y0); c.fillRect(bb.x1, bb.y0, cv.width - bb.x1, bb.y1 - bb.y0);
+    for (y = 0; y < an.FH; y++) {
+      var run = -1;
+      for (x = 0; x <= an.FW; x++) {
+        var inside = (y + 1) * f > bb.y0 && y * f < bb.y1 && (x + 1) * f > bb.x0 && x * f < bb.x1;
+        var off = x < an.FW && inside && !an.keep[y * an.FW + x];
+        if (off && run < 0) run = x;
+        if (!off && run >= 0) { c.fillRect(run * f, y * f, (x - run) * f, f); run = -1; }
+      }
+    }
+    return cv;
+  }
+
+  function summarize(an) {
+    if (!an.grid.found) return { status: 'nogrid' };
+    var bb = an.grid.bbox;
+    return {
+      status: 'ok', plain: an.mode === 'plain', blurry: an.stats.sharp < 0.18, searchable: searchable(an),
+      rows: an.trace ? an.trace.rows : 0,
+      trimmed: bb.x0 > 0 || bb.y0 > 0 || bb.x1 < an.W || bb.y1 < an.H
+    };
+  }
+
+  root.ECGPipe = { toWorkCanvas: toWorkCanvas, analyzeCanvas: analyzeCanvas, compose: compose, review: review, summarize: summarize,
+                   candidates: candidates, isDetection: isDetection, ZONE: ZONE };
+})(window);
+
+(function () {
+  'use strict';
+  var P = window.ECGPipe, $ = function (id) { return document.getElementById(id); };
+  var BOOT = window.ECG_BOOT || null;          // { view, key } written by the server; absent in the demo
+  var DEMO = !!window.ECG_DEMO;                // demo: the server code runs inside this page, nothing leaves the browser
+  var settings = { ward: '' }, maxImages = 6;
+  try { settings.ward = localStorage.getItem('ecg-ward') || ''; } catch (e) {}
+  try { indexedDB.deleteDatabase('ecg-demo'); localStorage.removeItem('ecg-demo-settings'); } catch (e) {}   // leftovers of earlier demos
+
+  /* ================= server calls ================= */
+  /* Two ways to reach the server. Inside Apps Script: google.script.run. When this same file is served
+     from somewhere else: plain HTTPS requests to the web app, sent without cookies, so the Google
+     accounts the browser happens to be signed in to cannot get in the way. */
+  var API = '';                                // deployment id of the web app, taken from the address (#a=…)
+  function hasGas() { return !!(window.google && google.script && google.script.run); }
+  function hasServer() { return hasGas() || !!API; }
+  function execUrl() { return 'https://script.google.com/macros/s/' + API + '/exec'; }
+  function post(fn, args) {
+    return fetch(execUrl(), { method: 'POST', credentials: 'omit', redirect: 'follow', cache: 'no-store',
+                              headers: { 'Content-Type': 'text/plain;charset=utf-8' },      // a "simple" request: no preflight
+                              body: JSON.stringify({ fn: fn, args: args }) })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (j) { return j; }, function () { throw { error: 'net' }; })
+      .then(function (j) { if (!j || j.threw) throw { error: j && j.threw === 'nofn' ? 'nofn' : 'server' }; return j.value; });
+  }
+  function call(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    if (!hasGas() && API) return post(fn, args);
+    return new Promise(function (res, rej) {
+      if (!hasServer()) { rej({ error: 'nogas' }); return; }
+      var run = google.script.run.withSuccessHandler(res).withFailureHandler(function (e) { rej(e || {}); });
+      if (typeof run[fn] !== 'function') { rej({ error: 'nofn' }); return; }
+      run[fn].apply(run, args);
+    });
+  }
+  var ERR = {
+    key: 'このページの有効期限が切れています。QRコードから開き直してください。',
+    auth: 'もう一度パスコードを入れてください。', full: '保管できる件数の上限です。医師に不要な心電図の削除を依頼してください。',
+    toobig: '画像が大きすぎます。', badimage: '画像を受け取れませんでした。', idlike: 'IDのような数字が含まれています。氏名・IDは書かないでください。',
+    nocase: 'この送信は見つかりません。', count: '枚数が合いません。', ward: '病棟を入れてください。', server: 'サーバーで問題が起きました。',
+    nogas: 'このファイルは、パソコンやスマホで直接開いても動きません。Apps Script に貼り付けて公開（デプロイ）し、そのURLから開いてください。',
+    nofn: 'サーバー側のプログラム（Code.gs）が見つかりません。Code.gs を保存し、「デプロイ」→「デプロイを管理」で新しいバージョンに更新してください。',
+    net: 'サーバーにつながりませんでした。電波の状態を確かめて、もう一度試してください。何度も出るときは、開いたURL（QRコード）が古いか、サーバー側の更新（デプロイ）が済んでいない可能性があります。',
+    badpage: 'URLの形が違います。https:// で始まる、index.html を置いた場所のURLを入れてください。'
+  };
+  function errText(e) { return (e && ERR[e.error]) || '通信できませんでした。電波の状態を確かめてください。' + (e && e.message ? '（' + e.message + '）' : ''); }
+
+  /* ================= small helpers ================= */
+  function z(n) { return (n < 10 ? '0' : '') + n; }
+  function localInput(d) { return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()); }   // the day only; a time goes in the memo when it matters
+  function fmtTs(ts) { var d = new Date(ts); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); }
+  function fmtRec(v) { return v ? v.slice(0, 10).replace(/-/g, '/') : '日付未記入'; }
+  function looksLikeId(t) { return /[0-9０-９]{6,}/.test(t || ''); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function countsText(n, now) { return n + '枚（今回' + now + '・過去' + (n - now) + '）'; }
+  function remaining(expiresAt) {
+    var m = Math.ceil((expiresAt - Date.now()) / 60000);
+    if (m <= 0) return 'まもなく削除';
+    return m >= 120 ? 'あと' + Math.round(m / 60) + '時間で自動削除' : 'あと' + m + '分で自動削除';
+  }
+  function kindBadge(it) { return el('span', 'badge' + (it.kind === 'now' ? ' now' : ''), it.kind === 'now' ? '今回' : '過去'); }
+
+  /* ================= nurse 1–2: capture, anonymize, check ================= */
+  var st = { work: null, an: null, sum: null, manual: [], view: 'out', src: '', out: null, rev: null, draw: false, crop: false, drag: null, ms: 0, added: false, recTouched: false, cands: [], picked: {}, orig: null, cropped: false, whole: false };
+  var view = $('view'), vctx = view.getContext('2d'), stage = $('stage');
+  var SAMPLE_NAMES = { clean: '見本「文字なし」', margin: '見本「余白に氏名・ID」', ingrid: '見本「方眼内に氏名・ID」', photo: '見本「斜め撮影・ラベル」' };
+
+  function banner(level, title, detail) {
+    var b = $('banner'); b.dataset.level = level;
+    b.firstElementChild.textContent = title; b.lastElementChild.textContent = detail || '';
+  }
+  /* Nothing is covered automatically. Lettering found near the edges of the sheet is framed in red (st.cands);
+     the user covers what is personal, by pressing a frame or by drawing. No picture is refused. */
+  function pickedCount() { return Object.keys(st.picked).length; }
+  function masks() { return st.cands.filter(function (c, i) { return st.picked[i]; }).concat(st.manual); }
+  function verdict() {
+    var s = st.sum;
+    if (!s) return { ok: false };
+    if (s.status !== 'ok') return { ok: false, level: 'stop', title: '画像を処理できませんでした', detail: '別の写真で試してください。' };
+    var open = st.cands.length - pickedCount(), done = pickedCount() + st.manual.length;
+    var where = '写りやすいのは画像の上と下の端、モニター心電図では左上です。';   // used when no waveform rows were found
+    var how = '氏名・IDが写っていたら「手で隠す」を押し、指でなぞって隠してください。';
+    if (open) return { ok: true, level: 'warn', title: '端のほうに文字が ' + open + ' か所あります（赤い枠）',
+      detail: '氏名・IDなら、赤い枠を押すと隠れます。枠のない場所は「手で隠す」でなぞってください。' };
+    if (s.blurry) return { ok: true, level: 'warn', title: 'ピントが合っていないようです',
+      detail: '波形が読みにくければ撮り直してください。氏名・IDが写っていないかは、目で確かめてください。' + where + how };
+    return { ok: true, level: 'note',
+      title: done ? done + ' か所を隠しました。ほかに残っていないか確かめてください'
+           : s.rows >= 2 ? '波形 ' + s.rows + ' 段の外側を切り落としました。残りに氏名・IDがないか確かめてください' : '氏名・IDが写っていないか確かめてください',
+      detail: (s.rows >= 2 ? '波形の上と下は自動で切り落としています。波形まで切れていれば「切り落としをやめる」を押してください。' : where) + how };
+  }
+  function paint() {
+    var v = verdict(), showOut = st.view === 'out' && v.ok && st.out, img = showOut ? st.out : st.rev;
+    if (!img) return;
+    view.width = img.width; view.height = img.height; vctx.drawImage(img, 0, 0);
+    if (showOut && !st.added) {                      // frames are drawn on the preview only, never into the picture that is sent
+      var ob = st.an.grid.bbox, lw = Math.max(3, Math.round(view.width / 300));
+      st.cands.forEach(function (c, i) {
+        if (st.picked[i]) return;
+        vctx.fillStyle = 'rgba(214,40,40,.14)'; vctx.fillRect(c.x - ob.x0, c.y - ob.y0, c.w, c.h);
+        vctx.strokeStyle = '#d62828'; vctx.lineWidth = lw; vctx.setLineDash([3 * lw, 2 * lw]);
+        vctx.strokeRect(c.x - ob.x0, c.y - ob.y0, c.w, c.h); vctx.setLineDash([]);
+      });
+    }
+    if (st.drag && showOut) {
+      var d = st.drag, x0 = Math.min(d.x0, d.x1), y0 = Math.min(d.y0, d.y1), w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+      if (st.crop) {                                 // dim what will be cut away
+        vctx.fillStyle = 'rgba(21,23,26,.6)';
+        vctx.fillRect(0, 0, view.width, y0); vctx.fillRect(0, y0 + h, view.width, view.height - y0 - h);
+        vctx.fillRect(0, y0, x0, h); vctx.fillRect(x0 + w, y0, view.width - x0 - w, h);
+        vctx.strokeStyle = '#ffffff'; vctx.lineWidth = Math.max(2, view.width / 500); vctx.strokeRect(x0, y0, w, h);
+      } else { vctx.fillStyle = 'rgba(21,23,26,.75)'; vctx.fillRect(x0, y0, w, h); }
+    }
+  }
+  function render() {
+    if (!st.sum) return;
+    var v = verdict();
+    banner(v.level, v.title, v.detail);
+    st.out = v.ok ? P.compose(st.work, st.an, masks()) : null;
+    if (!v.ok) st.view = 'rev';
+    $('v-out').disabled = !v.ok; $('v-rev').disabled = false;
+    $('v-out').setAttribute('aria-pressed', String(st.view === 'out'));
+    $('v-rev').setAttribute('aria-pressed', String(st.view === 'rev'));
+    $('legend').hidden = st.view !== 'rev' || !st.sum.trimmed;
+    var canDraw = v.ok && st.view === 'out' && !st.added;
+    if (!canDraw) { st.draw = false; st.crop = false; }
+    $('drawBtn').disabled = !canDraw; $('drawBtn').setAttribute('aria-pressed', String(st.draw));
+    $('cropBtn').disabled = !canDraw; $('cropBtn').setAttribute('aria-pressed', String(st.crop));
+    /* one "back" button: undo the user's cropping, or switch the automatic cutting-away of the margin off and on */
+    var back = !canDraw ? '' : st.cropped && st.orig ? '切り抜き前に戻す' : st.whole ? '自動の切り落としに戻す' : st.sum.trimmed ? '切り落としをやめる' : '';
+    $('uncropBtn').hidden = !back; $('uncropBtn').textContent = back || '切り抜き前に戻す';
+    $('undoBtn').disabled = !st.manual.length || !canDraw;
+    $('drawHint').textContent = st.draw ? '画像の上をなぞると、その範囲を黒く隠します。' : st.crop ? '残したい範囲をなぞると、その外側を切り落とします。'
+      : canDraw && (pickedCount() || st.manual.length) ? '黒く隠した部分は、押すと外せます。' : '';
+    stage.classList.toggle('draw', st.draw || st.crop);
+    stage.classList.toggle('tap', canDraw && !st.draw && !st.crop && (st.cands.length > 0 || st.manual.length > 0));
+    $('srcLabel').textContent = st.src;
+    $('confirmBox').disabled = !v.ok || st.added;
+    if (!v.ok) $('confirmBox').checked = false;
+    syncAdd(); facts(v); paint();
+  }
+  function facts(v) {
+    var an = st.an, s = st.sum, rows = [['読み込んだ写真', an.W + ' × ' + an.H + ' px']];
+    if (an.grid.found) {
+      var bb = an.grid.bbox;
+      rows.push(['送信用の画像', (bb.x1 - bb.x0) + ' × ' + (bb.y1 - bb.y0) + ' px' + (s.trimmed ? '（外側を自動で切り落とし）' : '（切り落としなし）')]);
+      rows.push(['波形の段', s.rows >= 2 ? s.rows + ' 段（その上下を切り落とし）' : '見つからず（切り落としは方眼の外側だけ）']);
+      rows.push(['端で見つけた文字', s.searchable ? st.cands.length + ' か所' : '探せない画像（ピント・明暗）']);
+      rows.push(['隠した箇所', '赤い枠から ' + pickedCount() + ' か所・手で ' + st.manual.length + ' か所']);
+    }
+    rows.push(['位置情報・撮影日時', '送る画像には含めない']);
+    rows.push(['処理時間', (st.ms / 1000).toFixed(1) + ' 秒']);
+    var dl = $('facts'); dl.textContent = '';
+    rows.forEach(function (r) { dl.appendChild(el('dt', '', r[0])); dl.appendChild(el('dd', '', r[1])); });
+    var t = an.stats;
+    $('tech').textContent = '種類=' + (s.plain ? '方眼に色なし' : '色つき方眼') + '  方眼の占める割合=' + (an.grid.coverage * 100).toFixed(0) + '%' +
+      (an.grid.found && t.sharp != null ? '  鮮鋭度=' + t.sharp.toFixed(2) + (t.inkFrac != null ? '  インク面積=' + (t.inkFrac * 100).toFixed(1) + '%' : '') : '');
+  }
+  function syncAdd() {
+    var v = verdict(), bad = looksLikeId($('itemNote').value);
+    $('itemAlert').hidden = !bad;
+    if (bad) $('itemAlert').textContent = 'メモにIDのような数字があります。氏名・IDは書かないでください。';
+    $('addBtn').disabled = !(v.ok && $('confirmBox').checked) || st.added || bad;
+    $('addBtn').textContent = st.added ? '追加済み' : '送信リストに追加';
+  }
+  function load(source, name, sample, cropped, keepFields) {
+    banner('busy', '処理しています', '');
+    $('confirmBox').checked = false; $('addNote').textContent = '';
+    setTimeout(function () {
+      var t0 = performance.now();
+      try {
+        st.work = P.toWorkCanvas(source); st.an = P.analyzeCanvas(st.work, st.whole ? { forcePlain: true, noTrim: true } : null); st.sum = P.summarize(st.an);
+        st.rev = P.review(st.work, st.an); st.cands = P.candidates(st.an);
+      } catch (e) { st.sum = null; banner('stop', '画像を処理できませんでした', '別の写真で試してください。'); return; }
+      st.ms = performance.now() - t0; st.sample = !!sample; st.manual = []; st.view = 'out'; st.src = name; st.draw = false; st.crop = false; st.drag = null; st.added = false;
+      st.picked = {}; st.cropped = !!cropped;
+      if (!cropped && !keepFields) {                 // a new photo: start the per-image fields afresh
+        st.orig = null; $('itemNote').value = ''; st.recTouched = false;
+        $('recAt').value = $('kind-past').checked ? '' : localInput(new Date());
+      }
+      render();
+    }, 30);
+  }
+  /* two buttons: recent Android versions no longer offer the camera from the ordinary photo chooser */
+  $('camInput').addEventListener('change', onPick); $('fileInput').addEventListener('change', onPick);
+  function onPick(e) {
+    var file = e.target.files && e.target.files[0]; if (!file) return;
+    banner('busy', '写真を読み込んでいます', '');
+    var done = function (src) { st.whole = false; load(src, '撮影・選択した写真'); e.target.value = ''; };
+    var fail = function () { banner('stop', 'この画像は読み込めません', 'JPEG か PNG の写真を選んでください。'); e.target.value = ''; };
+    if (window.createImageBitmap) createImageBitmap(file).then(done, function () { viaImg(file, done, fail); });
+    else viaImg(file, done, fail);
+  }
+  function viaImg(file, done, fail) {
+    var url = URL.createObjectURL(file), im = new Image();
+    im.onload = function () { done(im); URL.revokeObjectURL(url); };
+    im.onerror = function () { fail(); URL.revokeObjectURL(url); };
+    im.src = url;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('[data-sample]'), function (btn) {
+    btn.addEventListener('click', function () { runSample(btn.dataset.sample); });
+  });
+  function runSample(k) { st.whole = false; load(window.ECGSample.draw(k).canvas, SAMPLE_NAMES[k] + '（架空の氏名・ID）', true); }
+
+  $('v-out').addEventListener('click', function () { st.view = 'out'; render(); });
+  $('v-rev').addEventListener('click', function () { st.view = 'rev'; render(); });
+  $('zoomBtn').addEventListener('click', function () {
+    var on = !stage.classList.contains('zoom'); stage.classList.toggle('zoom', on);
+    $('zoomBtn').setAttribute('aria-pressed', String(on)); $('zoomBtn').textContent = on ? '全体表示' : '拡大';
+  });
+  $('drawBtn').addEventListener('click', function () { st.draw = !st.draw; st.crop = false; render(); });
+  $('cropBtn').addEventListener('click', function () { st.crop = !st.crop; st.draw = false; render(); });
+  $('uncropBtn').addEventListener('click', function () {
+    $('confirmBox').checked = false;
+    if (st.cropped && st.orig) { var o = st.orig; st.orig = null; load(o, st.src, st.sample, false, true); return; }
+    st.whole = !st.whole; load(st.work, st.src, st.sample, false, true);     // same photo, with or without the automatic cutting-away
+  });
+  $('undoBtn').addEventListener('click', function () { st.manual.pop(); $('confirmBox').checked = false; render(); });
+  $('confirmBox').addEventListener('change', syncAdd);
+  $('itemNote').addEventListener('input', syncAdd);
+  $('recAt').addEventListener('input', function () { st.recTouched = true; });
+  $('kind-past').addEventListener('change', function () { if (!st.recTouched) $('recAt').value = ''; });
+  $('kind-now').addEventListener('change', function () { if (!$('recAt').value) $('recAt').value = localInput(new Date()); });
+
+  function pos(e) {
+    var r = view.getBoundingClientRect();
+    return { x: (e.clientX - r.left) * view.width / r.width, y: (e.clientY - r.top) * view.height / r.height };
+  }
+  view.addEventListener('pointerdown', function (e) {
+    downAt = { x: e.clientX, y: e.clientY };
+    if (!st.draw && !st.crop) return;              // a press is handled on "click", so that scrolling over the picture changes nothing
+    var p = pos(e); st.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    try { view.setPointerCapture(e.pointerId); } catch (err) {}
+    e.preventDefault();
+  });
+  view.addEventListener('pointermove', function (e) { if (!st.drag) return; var p = pos(e); st.drag.x1 = p.x; st.drag.y1 = p.y; paint(); });
+  function endDrag() {
+    if (!st.drag) return;
+    var d = st.drag, bb = st.an.grid.bbox; st.drag = null; dragEnded = Date.now();
+    var w = Math.abs(d.x1 - d.x0), h = Math.abs(d.y1 - d.y0);
+    if (st.crop) {
+      st.crop = false;
+      if (w < 80 || h < 80) { render(); return; }                      // too small to be meant
+      var cx = Math.max(0, Math.round(Math.min(d.x0, d.x1) + bb.x0)), cy = Math.max(0, Math.round(Math.min(d.y0, d.y1) + bb.y0));
+      var cw = Math.min(st.work.width - cx, Math.round(w)), ch = Math.min(st.work.height - cy, Math.round(h));
+      var cut = document.createElement('canvas'); cut.width = cw; cut.height = ch;
+      cut.getContext('2d').drawImage(st.work, cx, cy, cw, ch, 0, 0, cw, ch);
+      var first = st.orig || st.work; st.orig = first;
+      $('confirmBox').checked = false;
+      load(cut, st.src, st.sample, true);                              // analysed again from the cropped picture
+      return;
+    }
+    if (w >= 6 && h >= 6) {
+      st.manual.push({ x: Math.round(Math.min(d.x0, d.x1) + bb.x0), y: Math.round(Math.min(d.y0, d.y1) + bb.y0), w: Math.round(w), h: Math.round(h) });
+      $('confirmBox').checked = false;
+    }
+    render();
+  }
+  view.addEventListener('pointerup', endDrag); view.addEventListener('pointercancel', endDrag);
+  var dragEnded = 0, downAt = null;
+  view.addEventListener('click', function (e) {
+    var still = !downAt || Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y) < 12;      // a press, not a drag
+    if (still && !st.draw && !st.crop && Date.now() - dragEnded > 500) tapMask(e);
+  });
+  /* Pressing a red frame covers it; pressing something already covered (a frame or a hand-drawn box) uncovers it. */
+  function tapMask(e) {
+    if (!st.sum || st.view !== 'out' || st.added || !st.out) return;
+    var r = view.getBoundingClientRect(), slop = 10 * view.width / Math.max(1, r.width);      // a fingertip is not a pixel
+    var p = pos(e), bb = st.an.grid.bbox, x = p.x + bb.x0, y = p.y + bb.y0, i;
+    var hit = function (b, m) { return x >= b.x - m && x <= b.x + b.w + m && y >= b.y - m && y <= b.y + b.h + m; };
+    for (i = st.manual.length - 1; i >= 0; i--) if (hit(st.manual[i], 0)) { st.manual.splice(i, 1); $('confirmBox').checked = false; render(); return; }
+    for (var pass = 0; pass < 2; pass++) for (i = st.cands.length - 1; i >= 0; i--) if (hit(st.cands[i], pass ? slop : 0)) {
+      if (st.picked[i]) delete st.picked[i]; else st.picked[i] = true;
+      $('confirmBox').checked = false; render(); return;
+    }
+  }
+
+  /* ================= nurse 3: send to the shared store ================= */
+  var draft = [], lastSent = null, sending = false, recallTimer = null, recipients = [], chosen = {};
+  var nurseKey = DEMO ? 'demo' : (BOOT && BOOT.key) || '';
+  $('addBtn').addEventListener('click', function () {
+    if (!st.out || st.added) return;
+    if (draft.length >= maxImages) { $('addNote').textContent = '1回に送れるのは' + maxImages + '枚までです。'; return; }
+    draft.push({
+      dataUrl: st.out.toDataURL('image/jpeg', 0.85), kind: $('kind-past').checked ? 'past' : 'now',
+      recordedAt: $('recAt').value, note: $('itemNote').value.trim(), sample: !!st.sample
+    });
+    st.added = true; $('confirmBox').checked = false; $('sent').hidden = true;
+    $('addNote').textContent = '送信リストに入れました（' + draft.length + '枚）。続けて別の写真を撮れます。';
+    render(); renderDraft();
+  });
+  function renderDraft() {
+    var ul = $('draftList'); ul.textContent = '';
+    draft.forEach(function (it, i) {
+      var li = el('li', 'row'), im = el('img'); im.src = it.dataUrl; im.alt = '';
+      var t = el('div', 't'), top = el('b');
+      top.appendChild(kindBadge(it)); top.appendChild(document.createTextNode(' ' + fmtRec(it.recordedAt)));
+      t.appendChild(top); t.appendChild(el('span', '', (it.sample ? '【見本】' : '') + (it.note || 'メモなし')));
+      var rm = el('button', 'btn small', '外す'); rm.type = 'button'; rm.disabled = sending;
+      rm.setAttribute('aria-label', (i + 1) + '枚目を送信リストから外す');
+      rm.addEventListener('click', function () { draft.splice(i, 1); renderDraft(); });
+      li.appendChild(im); li.appendChild(t); li.appendChild(rm); ul.appendChild(li);
+    });
+    $('draftEmpty').hidden = draft.length > 0;
+    syncSend();
+  }
+  /* names only; the addresses stay on the server */
+  function renderTo() {
+    var box = $('toList'); box.textContent = '';
+    Object.keys(chosen).forEach(function (id) { if (!recipients.some(function (r) { return r.id === id; })) delete chosen[id]; });
+    if (recipients.length === 1) chosen[recipients[0].id] = true;
+    recipients.forEach(function (r) {
+      var lab = el('label', 'pick'), cb = el('input'); cb.type = 'checkbox'; cb.id = 'to-' + r.id; cb.checked = !!chosen[r.id]; cb.disabled = sending;
+      cb.addEventListener('change', function () { if (cb.checked) chosen[r.id] = true; else delete chosen[r.id]; });
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(r.name + ' 先生')); box.appendChild(lab);
+    });
+    $('toBox').hidden = !recipients.length;
+  }
+  function syncSend() {
+    var bad = looksLikeId($('caseNote').value) || looksLikeId($('ward').value);
+    if (bad) { $('caseAlert').hidden = false; $('caseAlert').textContent = ERR.idlike; }
+    else if (!sendFailed) $('caseAlert').hidden = true;
+    $('sendBtn').disabled = sending || !draft.length || !$('ward').value.trim() || bad;
+    $('sendBtn').textContent = sending ? '送信しています' : draft.length ? draft.length + '枚を送信' : '送信';
+    $('ward').disabled = sending; $('caseNote').disabled = sending;
+    Array.prototype.forEach.call(document.querySelectorAll('#toList input'), function (cb) { cb.disabled = sending; });
+  }
+  var sendFailed = false;
+  $('ward').value = settings.ward || '';
+  $('ward').addEventListener('input', function () { sendFailed = false; syncSend(); });
+  $('caseNote').addEventListener('input', function () { sendFailed = false; syncSend(); });
+  $('sendBtn').addEventListener('click', function () {
+    if (sending || !draft.length) return;
+    var items = draft.slice(), ward = $('ward').value.trim(), note = $('caseNote').value.trim(), id, up;
+    var to = recipients.filter(function (r) { return chosen[r.id]; }).map(function (r) { return r.id; });
+    sending = true; sendFailed = false; $('sent').hidden = true; $('caseAlert').hidden = true;
+    $('sendStatus').textContent = '送信の準備をしています'; renderDraft();
+    call('apiCreateCase', nurseKey, { ward: ward, note: note, count: items.length, to: to }).then(function (r) {
+      if (!r || !r.ok) throw r;
+      id = r.id; up = r.up;
+      return items.reduce(function (chain, it, i) {
+        return chain.then(function () {
+          $('sendStatus').textContent = items.length + '枚のうち' + (i + 1) + '枚目を送っています';
+          return call('apiUploadImage', nurseKey, id, up, i, { kind: it.kind, recordedAt: it.recordedAt, note: it.note, sample: it.sample }, it.dataUrl)
+            .then(function (r2) { if (!r2 || !r2.ok) throw r2; });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      $('sendStatus').textContent = '仕上げています';
+      return call('apiFinalize', nurseKey, id, up);
+    }).then(function (r) {
+      if (!r || !r.ok) throw r;
+      lastSent = { id: id, recall: r.recall };
+      try { localStorage.setItem('ecg-ward', ward); } catch (e) {}
+      sending = false; draft = []; $('caseNote').value = ''; $('addNote').textContent = ''; $('sendStatus').textContent = '';
+      $('sentTitle').textContent = items.length + '枚を送信しました';
+      var okNames = (r.mailed || []).map(function (n) { return n + ' 先生'; }).join('、'), ngNames = (r.mailFailed || []).map(function (n) { return n + ' 先生'; }).join('、');
+      $('sentText').textContent = (okNames ? okNames + 'にメールで知らせました' + (DEMO ? '（デモでは実際には送られません）' : '') + '。念のため電話でも伝えてください。' : '当番医に電話で、心電図を送ったことを伝えてください。') +
+        (ngNames ? ngNames + 'にはメールを送れませんでした。電話で伝えてください。' : '') + 'この端末に画像は残っていません。';
+      chosen = {}; renderTo();
+      $('recallBtn').hidden = false; $('recallBtn').disabled = false; $('recallNote').textContent = (r.recallMin || 10) + '分以内なら取り消せます。';
+      clearTimeout(recallTimer); recallTimer = setTimeout(function () { $('recallBtn').hidden = true; $('recallNote').textContent = ''; }, (r.recallMin || 10) * 60000);
+      clearCheck(); renderDraft(); $('sent').hidden = false;
+      if (DEMO) refreshDoctor();
+    }).catch(function (e) {
+      sending = false; sendFailed = true; $('sendStatus').textContent = '';
+      $('caseAlert').hidden = false; $('caseAlert').textContent = '送信できませんでした。' + errText(e) + ' 送信リストは残っています。もう一度「送信」を押してください。';
+      renderDraft();
+    });
+  });
+  $('recallBtn').addEventListener('click', function () {
+    if (!lastSent) return;
+    $('recallBtn').disabled = true;
+    call('apiRecall', lastSent.id, lastSent.recall).then(function (r) {
+      if (!r || !r.ok) throw r;
+      lastSent = null; clearTimeout(recallTimer); $('recallBtn').hidden = true;
+      $('sentTitle').textContent = '送信を取り消しました'; $('sentText').textContent = '送った画像とコメントは削除されました。';
+      $('recallNote').textContent = '';
+      if (DEMO) refreshDoctor();
+    }).catch(function (e) {
+      $('recallBtn').disabled = false;
+      $('recallNote').textContent = e && e.error === 'expired' ? '取り消せる時間を過ぎました。削除は医師に電話で依頼してください。' : errText(e);
+    });
+  });
+  /* after sending, nothing of the ECG stays on screen or in memory */
+  function clearCheck() {
+    st.work = st.an = st.sum = st.out = st.rev = null; st.manual = []; st.added = false; st.draw = false; st.crop = false; st.drag = null; st.src = ''; st.sample = false; st.cands = []; st.picked = {}; st.orig = null; st.cropped = false; st.whole = false;
+    view.width = 1600; view.height = 400; vctx.clearRect(0, 0, view.width, view.height);
+    banner('idle', '送信が済みました', '次の心電図は「1 撮る」から始めてください。');
+    ['v-out', 'v-rev', 'drawBtn', 'cropBtn', 'undoBtn', 'confirmBox'].forEach(function (id) { $(id).disabled = true; });
+    $('uncropBtn').hidden = true; stage.classList.remove('tap');
+    $('confirmBox').checked = false; $('itemNote').value = ''; $('srcLabel').textContent = ''; $('drawHint').textContent = '';
+    $('legend').hidden = true; $('facts').textContent = ''; $('tech').textContent = ''; stage.classList.remove('draw');
+    syncAdd();
+  }
+
+  /* ================= doctor ================= */
+  var wantCase = (BOOT && BOOT.c) || '';        // opened from the link in a notification mail
+  var token = null, listData = null, current = null, caseData = null, images = {}, picked = [], zoomed = false, loadSeq = 0, busyList = false;
+  try { token = sessionStorage.getItem('ecg-token') || null; } catch (e) {}
+  function setToken(t) { token = t; try { if (t) sessionStorage.setItem('ecg-token', t); else sessionStorage.removeItem('ecg-token'); } catch (e) {} }
+  function showGate(msg) {
+    $('gate').hidden = false; $('dr-rail').hidden = true; $('p-case').hidden = true; $('demoPass').hidden = !DEMO;
+    $('passAlert').hidden = !msg; $('passAlert').textContent = msg || '';
+    listData = null; current = null; caseData = null; images = {};
+  }
+  function denied(r) { if (r && r.error === 'auth') { setToken(null); showGate(ERR.auth); return true; } return false; }
+  $('gate').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pass = $('pass').value; if (!pass) return;
+    $('unlockBtn').disabled = true; $('passAlert').hidden = true;
+    call('apiLogin', pass).then(function (r) {
+      $('unlockBtn').disabled = false;
+      if (r && r.ok) { setToken(r.token); $('pass').value = ''; refreshDoctor(); return; }
+      $('passAlert').hidden = false;
+      $('passAlert').textContent = r && r.error === 'locked' ? '間違いが続いたため、' + r.waitMin + '分間は開けません。'
+        : r && r.error === 'bad' ? 'パスコードが違います（あと' + r.left + '回）。' : errText(r);
+    }).catch(function (e2) { $('unlockBtn').disabled = false; $('passAlert').hidden = false; $('passAlert').textContent = errText(e2); });
+  });
+  function refreshDoctor() {
+    if (!token) { showGate(); return; }
+    if (busyList) return; busyList = true; $('refreshBtn').disabled = true;
+    call('apiList', token).then(function (r) {
+      busyList = false; $('refreshBtn').disabled = false;
+      if (!r || !r.ok) { if (!denied(r)) $('inboxNote').textContent = errText(r); return; }
+      listData = r; $('gate').hidden = true; $('dr-rail').hidden = false; $('p-case').hidden = false;
+      if (current && !r.cases.some(function (c) { return c.id === current; })) { current = null; caseData = null; images = {}; }
+      renderInbox(); renderSettings(); renderCase();
+      if (wantCase) {
+        var want = wantCase; wantCase = '';
+        if (r.cases.some(function (c) { return c.id === want; })) openCase(want);
+        else $('inboxNote').textContent = 'メールで案内された心電図は、すでに削除されています。';
+      }
+    }).catch(function (e) { busyList = false; $('refreshBtn').disabled = false; $('inboxNote').textContent = errText(e); });
+  }
+  function renderInbox() {
+    var ul = $('inbox'); ul.textContent = '';
+    listData.cases.forEach(function (c) {
+      var li = el('li'), b = el('button', 'row plain'); b.type = 'button';
+      if (c.id === current) b.setAttribute('aria-current', 'true');
+      var t = el('div', 't');
+      t.appendChild(el('b', '', c.ward + '　' + countsText(c.n, c.now)));
+      t.appendChild(el('span', '', '受信 ' + fmtTs(c.createdAt) + '・' + remaining(c.expiresAt)));
+      b.appendChild(t); b.appendChild(c.read ? el('span', 'badge', '確認済み') : el('span', 'badge new', '未読'));
+      b.addEventListener('click', function () { openCase(c.id); });
+      li.appendChild(b); ul.appendChild(li);
+    });
+    $('inboxEmpty').hidden = listData.cases.length > 0; $('wipeBtn').hidden = !listData.cases.length;
+  }
+  function openCase(id) {
+    current = id; caseData = null; images = {}; picked = []; armDelete(false);
+    var seq = ++loadSeq; renderInbox(); renderCase();
+    if (window.matchMedia('(max-width: 939px)').matches) $('p-case').scrollIntoView({ block: 'start' });
+    call('apiGetCase', token, id).then(function (r) {
+      if (seq !== loadSeq) return;
+      if (!r || !r.ok) { if (!denied(r)) { current = null; refreshDoctor(); } return; }
+      caseData = r['case'];
+      listData.cases.forEach(function (c) { if (c.id === id) c.read = true; });
+      renderInbox(); renderCase();
+      return caseData.items.reduce(function (chain, it) {
+        return chain.then(function () {
+          if (seq !== loadSeq) return;
+          return call('apiGetImage', token, id, it.idx).then(function (ri) {
+            if (seq !== loadSeq) return;
+            images[it.idx] = ri && ri.ok ? ri.dataUrl : 'error'; renderCase();
+          });
+        });
+      }, Promise.resolve());
+    }).catch(function () { if (seq === loadSeq) { $('caseMeta').textContent = '読み込めませんでした。「更新」を押してください。'; } });
+  }
+  function shotCaption(it) {
+    var cap = el('figcaption'); cap.appendChild(kindBadge(it));
+    if (it.sample) cap.appendChild(el('span', 'badge', '見本'));
+    cap.appendChild(el('span', 'when', fmtRec(it.recordedAt)));
+    if (it.note) cap.appendChild(el('span', 'memo', it.note));
+    return cap;
+  }
+  function shotStage(it) {
+    var s = el('div', 'stage' + (zoomed ? ' zoom' : '')), src = images[it.idx];
+    if (!src) { s.appendChild(el('p', 'loading', '読み込んでいます')); return s; }
+    if (src === 'error') { s.appendChild(el('p', 'loading', '画像を読み込めませんでした。')); return s; }
+    var im = el('img'); im.src = src; im.alt = (it.kind === 'now' ? '今回' : '過去') + 'の心電図 ' + fmtRec(it.recordedAt);
+    s.appendChild(im); return s;
+  }
+  function renderCase() {
+    var has = !!current;
+    $('caseEmpty').hidden = has; $('caseBody').hidden = !has;
+    if (!has) return;
+    var summary = listData.cases.filter(function (c) { return c.id === current; })[0];
+    if (!caseData) {
+      $('caseTitle').textContent = summary ? summary.ward + 'から ' + countsText(summary.n, summary.now) : '';
+      $('caseMeta').textContent = '読み込んでいます'; $('caseNoteOut').textContent = ''; $('shots').textContent = '';
+      $('compare').hidden = true; $('cmpBtn').hidden = true; $('cmpHint').textContent = ''; return;
+    }
+    var c = caseData, nowN = c.items.filter(function (i) { return i.kind === 'now'; }).length;
+    $('caseTitle').textContent = c.ward + 'から ' + countsText(c.items.length, nowN);
+    $('caseMeta').textContent = '受信 ' + fmtTs(c.createdAt) + '・' + remaining(summary ? summary.expiresAt : c.expiresAt);
+    $('caseNoteOut').textContent = c.note || '（コメントなし）';
+    var many = c.items.length > 2, shots = $('shots'); shots.textContent = '';
+    c.items.forEach(function (it) {
+      var fig = el('figure', 'shot'), cap = shotCaption(it);
+      if (many) {
+        cap.appendChild(el('span', 'grow'));
+        var pb = el('button', 'btn small', '比べる'); pb.type = 'button';
+        pb.setAttribute('aria-pressed', String(picked.indexOf(it.idx) >= 0));
+        pb.addEventListener('click', function () {
+          var at = picked.indexOf(it.idx);
+          if (at >= 0) picked.splice(at, 1); else { picked.push(it.idx); if (picked.length > 2) picked.shift(); }
+          renderCase();
+        });
+        cap.appendChild(pb);
+      }
+      fig.appendChild(cap); fig.appendChild(shotStage(it)); shots.appendChild(fig);
+    });
+    $('cmpBtn').hidden = many || c.items.length < 2;
+    $('cmpBtn').setAttribute('aria-pressed', String(!many && picked.length === 2));
+    $('cmpHint').textContent = many && picked.length !== 2 ? '比べたい2枚の「比べる」を押してください。' : '';
+    $('caseZoom').setAttribute('aria-pressed', String(zoomed)); $('caseZoom').textContent = zoomed ? '全体表示' : '拡大';
+    renderCompare(c);
+  }
+  function renderCompare(c) {
+    var box = $('compare'); box.textContent = '';
+    var pair = picked.map(function (ix) { return c.items.filter(function (i) { return i.idx === ix; })[0]; }).filter(Boolean);
+    box.hidden = pair.length !== 2;
+    if (pair.length !== 2) return;
+    pair.sort(function (a, b) {                       // older on top, the current one below it
+      if (a.kind !== b.kind) return a.kind === 'past' ? -1 : 1;
+      return (a.recordedAt || '') < (b.recordedAt || '') ? -1 : 1;
+    });
+    box.appendChild(el('h3', '', '並べて比較（拡大すると2枚が一緒に動きます）'));
+    var stages = pair.map(function (it) {
+      var fig = el('figure', 'shot'); fig.appendChild(shotCaption(it));
+      var s = shotStage(it); s.style.maxHeight = '40vh'; fig.appendChild(s); box.appendChild(fig); return s;
+    });
+    var lock = false;
+    stages.forEach(function (s, i) {
+      s.addEventListener('scroll', function () {
+        if (lock) return; lock = true;
+        var o = stages[1 - i], fx = s.scrollWidth - s.clientWidth, fy = s.scrollHeight - s.clientHeight;
+        o.scrollLeft = fx > 0 ? s.scrollLeft / fx * (o.scrollWidth - o.clientWidth) : 0;
+        o.scrollTop = fy > 0 ? s.scrollTop / fy * (o.scrollHeight - o.clientHeight) : 0;
+        requestAnimationFrame(function () { lock = false; });
+      });
+    });
+  }
+  $('cmpBtn').addEventListener('click', function () {
+    if (!caseData) return;
+    picked = picked.length === 2 ? [] : caseData.items.slice(0, 2).map(function (i) { return i.idx; });
+    renderCase();
+  });
+  $('caseZoom').addEventListener('click', function () { zoomed = !zoomed; renderCase(); });
+  $('refreshBtn').addEventListener('click', function () { $('inboxNote').textContent = ''; refreshDoctor(); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && token && !$('view-doctor').hidden) refreshDoctor(); });
+
+  /* deleting asks twice, in the page */
+  var delArmed = false, wipeArmed = false;
+  function armDelete(on) { delArmed = on; $('delBtn').textContent = on ? '本当に削除する（元に戻せません）' : 'この依頼を削除'; $('delNo').hidden = !on; }
+  function armWipe(on) { wipeArmed = on; $('wipeBtn').textContent = on ? '本当にすべて削除する' : 'すべて削除'; $('wipeNo').hidden = !on; }
+  function deletedText(n, permanent) {
+    return n + '件を削除しました。' + (permanent ? '' : '画像はGoogleドライブのごみ箱に移りました（30日で消えます）。すぐ消すには、設定手順の「Drive API」を追加してください。');
+  }
+  $('delBtn').addEventListener('click', function () {
+    if (!delArmed) { armDelete(true); return; }
+    var id = current; $('delBtn').disabled = true;
+    call('apiDeleteCase', token, id).then(function (r) {
+      $('delBtn').disabled = false; armDelete(false);
+      if (!r || !r.ok) { if (!denied(r)) $('inboxNote').textContent = errText(r); return; }
+      current = null; caseData = null; images = {}; loadSeq++;
+      $('inboxNote').textContent = deletedText(1, r.permanent); refreshDoctor();
+    }).catch(function (e) { $('delBtn').disabled = false; armDelete(false); $('inboxNote').textContent = errText(e); });
+  });
+  $('delNo').addEventListener('click', function () { armDelete(false); });
+  $('wipeBtn').addEventListener('click', function () {
+    if (!wipeArmed) { armWipe(true); return; }
+    $('wipeBtn').disabled = true;
+    call('apiDeleteAll', token).then(function (r) {
+      $('wipeBtn').disabled = false; armWipe(false);
+      if (!r || !r.ok) { if (!denied(r)) $('inboxNote').textContent = errText(r); return; }
+      current = null; caseData = null; images = {}; loadSeq++;
+      $('inboxNote').textContent = deletedText(r.n, r.permanent); refreshDoctor();
+    }).catch(function (e) { $('wipeBtn').disabled = false; armWipe(false); $('inboxNote').textContent = errText(e); });
+  });
+  $('wipeNo').addEventListener('click', function () { armWipe(false); });
+
+  /* settings */
+  function renderRecips(list) {
+    listData.recipients = list || [];
+    var ul = $('recips'); ul.textContent = '';
+    listData.recipients.forEach(function (r) {
+      var li = el('li', 'row plain'), t = el('div', 't');
+      t.appendChild(el('b', '', r.name + ' 先生')); t.appendChild(el('span', '', r.email));
+      var rm = el('button', 'btn small danger', '削除'); rm.type = 'button'; rm.setAttribute('aria-label', r.name + ' 先生を宛先から削除');
+      rm.addEventListener('click', function () {
+        rm.disabled = true;
+        call('apiRemoveRecipient', token, r.id).then(function (x) {
+          if (!x || !x.ok) { if (!denied(x)) $('rNote').textContent = errText(x); return; }
+          renderRecips(x.recipients); if (DEMO) recipients = x.recipients.map(function (q) { return { id: q.id, name: q.name }; }), renderTo();
+        }).catch(function (e) { rm.disabled = false; $('rNote').textContent = errText(e); });
+      });
+      li.appendChild(t); li.appendChild(rm); ul.appendChild(li);
+    });
+    $('recipsEmpty').hidden = listData.recipients.length > 0;
+    $('mailLeft').textContent = typeof listData.mailLeft === 'number' ? '今日はあと ' + listData.mailLeft + ' 通のメールを送れます（Googleの上限）。' : '';
+  }
+  $('recipForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = $('rName').value.trim(), mail = $('rMail').value.trim();
+    if (!name) { $('rNote').textContent = '名前を入れてください。'; $('rName').focus(); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(mail)) { $('rNote').textContent = 'メールアドレスの形を確かめてください。'; $('rMail').focus(); return; }
+    $('rAdd').disabled = true; $('rNote').textContent = '';
+    call('apiAddRecipient', token, name, mail).then(function (x) {
+      $('rAdd').disabled = false;
+      if (!x || !x.ok) {
+        if (denied(x)) return;
+        $('rNote').textContent = x && x.error === 'dup' ? 'このメールアドレスは登録済みです。' : x && x.error === 'email' ? 'メールアドレスの形を確かめてください。'
+          : x && x.error === 'name' ? '名前を入れてください。' : x && x.error === 'full' ? '登録できる人数の上限です。' : errText(x);
+        return;
+      }
+      $('rName').value = ''; $('rMail').value = ''; $('rNote').textContent = '登録しました。';
+      renderRecips(x.recipients); if (DEMO) recipients = x.recipients.map(function (q) { return { id: q.id, name: q.name }; }), renderTo();
+    }).catch(function (e2) { $('rAdd').disabled = false; $('rNote').textContent = errText(e2); });
+  });
+  function renderSettings() {
+    var s = listData.settings;
+    renderRecips(listData.recipients);
+    $('retention').value = String(s.retentionH);
+    var url = listData.nurseUrl;
+    $('qrBox').hidden = !url; $('urlFix').hidden = !!url || DEMO;
+    if (url) { $('nurseUrl').textContent = url; drawQr(url); $('qrNote').textContent = '印刷して病棟に掲示してください。'; }
+    else if (DEMO) $('qrNote').textContent = 'デモでは表示されません。公開（デプロイ）すると、ここに看護師用ページのQRコードが出ます。';
+    else $('qrNote').textContent = 'QRコードを作るには、Apps Script の「デプロイ」→「デプロイを管理」に出る「ウェブアプリ」のURLを下に貼り付けてください。' +
+      (/\/dev$/.test(listData.baseUrl || '') ? '今開いているのはテスト用（/dev）のページで、看護師は開けません。' : '');
+    $('doctorUrlBox').hidden = !listData.doctorUrl; $('doctorUrl').textContent = listData.doctorUrl || '';
+    var page = listData.pageUrl || '', here = herePage();
+    $('pageBox').hidden = DEMO || !('pageUrl' in listData); $('pageClear').hidden = !page;      // an older Code.gs does not know this setting
+    $('pageNote').textContent = page
+      ? '今の入口：' + page + '　ブラウザでGoogleアカウントにログインしていても開けます。'
+      : '今の入口は Apps Script のURL（script.google.com）です。スマホのブラウザで複数のGoogleアカウントにログインしていると、開けないことがあります。' +
+        'index.html を別の場所（GitHub Pages など）にも置き、そのURLを下に登録すると、QRコードとメールのURLがそちらに切り替わります。';
+    if (!$('pageUrl').value && !page && here) $('pageUrl').value = here;          // opened from that place already: one tap to register it
+  }
+  $('baseBtn').addEventListener('click', function () {
+    var u = $('baseUrl').value.trim();
+    if (!/\/exec([?#].*)?$/.test(u)) { $('baseNote').textContent = '/exec で終わるURLを貼り付けてください。'; return; }
+    $('baseNote').textContent = '保存しています';
+    call('apiSaveSettings', token, { baseUrl: u }).then(function (r) {
+      if (!r || !r.ok) { if (!denied(r)) $('baseNote').textContent = r && r.error === 'badurl' ? 'URLの形が違います。「デプロイを管理」の画面からコピーしてください。' : errText(r); return; }
+      $('baseNote').textContent = ''; $('baseUrl').value = ''; refreshDoctor();
+    }).catch(function (e) { $('baseNote').textContent = errText(e); });
+  });
+  /* Where this file is being served from, when that is not Apps Script. */
+  function herePage() { return !hasGas() && API && location.protocol === 'https:' ? location.origin + location.pathname : ''; }
+  function savePage(u) {
+    var s = { pageUrl: u }; if (!hasGas() && API) s.baseUrl = execUrl();
+    $('pageMsg').textContent = '保存しています';
+    call('apiSaveSettings', token, s).then(function (r) {
+      if (!r || !r.ok) { if (!denied(r)) $('pageMsg').textContent = errText(r); return; }
+      $('pageUrl').value = '';
+      $('pageMsg').textContent = u ? '登録しました。QRコードが変わったので、病棟の掲示を貼り替えてください。' : 'Apps Script のURLに戻しました。QRコードが変わったので、病棟の掲示を貼り替えてください。';
+      refreshDoctor();
+    }).catch(function (e) { $('pageMsg').textContent = errText(e); });
+  }
+  $('pageBtn').addEventListener('click', function () {
+    var u = $('pageUrl').value.trim().replace(/[?#].*$/, '');
+    if (!/^https:\/\/[^\s\/]+\.[^\s\/]+(\/\S*)?$/.test(u)) { $('pageMsg').textContent = ERR.badpage; return; }
+    savePage(u);
+  });
+  $('pageClear').addEventListener('click', function () { savePage(''); });
+  function drawQr(text) {
+    var cv = $('qr'), g = cv.getContext('2d');
+    try {
+      var q = window.qrcode(0, 'M'); q.addData(text); q.make();
+      var n = q.getModuleCount(), px = Math.max(2, Math.floor(600 / n));
+      cv.width = cv.height = n * px; g.fillStyle = '#ffffff'; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = '#000000';
+      for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (q.isDark(r, c)) g.fillRect(c * px, r * px, px, px);
+      cv.hidden = false;
+    } catch (e) { cv.hidden = true; }      // QR library unavailable: the URL text below still works
+  }
+  function saveSettings() {
+    var s = { retentionH: parseFloat($('retention').value) };
+    $('setNote').textContent = '保存しています';
+    call('apiSaveSettings', token, s).then(function (r) {
+      if (!r || !r.ok) { if (!denied(r)) $('setNote').textContent = errText(r); return; }
+      listData.settings = r.settings; $('setNote').textContent = '保存しました。';
+      refreshDoctor();
+    }).catch(function (e) { $('setNote').textContent = errText(e); });
+  }
+  $('retention').addEventListener('change', saveSettings);
+  $('passForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var o = $('oldPass').value, n = $('newPass').value;
+    if (!/^[0-9A-Za-z]{6,20}$/.test(n)) { $('passNote').textContent = '新しいパスコードは半角英数字6〜20文字にしてください。'; return; }
+    $('passBtn').disabled = true; $('passNote').textContent = '';
+    call('apiChangePass', token, o, n).then(function (r) {
+      $('passBtn').disabled = false;
+      if (r && r.ok) { $('oldPass').value = ''; $('newPass').value = ''; $('passNote').textContent = '変更しました。ほかの医師に新しいパスコードを伝えてください。'; return; }
+      if (denied(r)) return;
+      $('passNote').textContent = r && r.error === 'bad' ? '今のパスコードが違います。' : r && r.error === 'weak' ? '新しいパスコードは半角英数字6〜20文字にしてください。' : errText(r);
+    }).catch(function (e2) { $('passBtn').disabled = false; $('passNote').textContent = errText(e2); });
+  });
+
+  /* ================= which screen ================= */
+  function show(role) {
+    var dr = role === 'doctor';
+    $('p-wait').hidden = true; $('view-nurse').hidden = dr; $('view-doctor').hidden = !dr;
+    $('tab-nurse').setAttribute('aria-selected', String(!dr)); $('tab-doctor').setAttribute('aria-selected', String(dr));
+    if (dr) { armDelete(false); armWipe(false); if (token) refreshDoctor(); else showGate(); }
+  }
+  $('tab-nurse').addEventListener('click', function () { show('nurse'); });
+  $('tab-doctor').addEventListener('click', function () { show('doctor'); });
+
+  function startNurse(after) {
+    call('apiBoot', nurseKey).then(function (r) {
+      if (!r || !r.ok) { $('p-wait').hidden = true; $('p-denied').hidden = false; return; }
+      maxImages = r.maxImages || 6; recipients = r.recipients || [];
+      renderDraft(); renderTo(); after();
+    }).catch(function (e) { $('waitText').textContent = e && ERR[e.error] ? ERR[e.error] : '読み込めませんでした。' + errText(e); });
+  }
+  /* demo only: one marked example so the doctor's list is not empty */
+  function seedDemo() {
+    function shot(opts) {
+      var s = window.ECGSample.draw('clean', opts), g = s.grid, cv = document.createElement('canvas');
+      cv.width = g.w; cv.height = g.h; cv.getContext('2d').drawImage(s.canvas, -g.x, -g.y);
+      return cv.toDataURL('image/jpeg', 0.85);
+    }
+    var now = Date.now(), id, up;
+    return call('apiCreateCase', nurseKey, { ward: '見本・4階東', note: '（見本）14時から胸痛が続いています。入院時の心電図と比べてください。', count: 2 }).then(function (r) {
+      id = r.id; up = r.up;
+      return call('apiUploadImage', nurseKey, id, up, 0, { kind: 'now', recordedAt: localInput(new Date(now)), note: '胸痛時 14:20', sample: true }, shot({ st: { V1: 0.12, V2: 0.3, V3: 0.38, V4: 0.26, aVL: 0.06 } }));
+    }).then(function () {
+      return call('apiUploadImage', nurseKey, id, up, 1, { kind: 'past', recordedAt: localInput(new Date(now - 3 * 86400000)), note: '入院時', sample: true }, shot());
+    }).then(function () { return call('apiFinalize', nurseKey, id, up); });
+  }
+
+  if (DEMO) {
+    $('demoTag').hidden = false; $('roles').hidden = false; $('sampleBox').hidden = false;
+    $('lead').textContent = '病棟で撮った12誘導心電図から氏名・IDを隠して送り、医師が確認して削除するまでを試せます。このデモではサーバー役もこのページの中で動くため、画像はどこにも送られず、ページを閉じると消えます。';
+    startNurse(function () {
+      show(location.hash === '#doctor' ? 'doctor' : 'nurse'); runSample('margin');
+      seedDemo().catch(function () {});
+    });
+  } else if (hasGas()) {
+    bootInfo(function (b) {
+      if (b.view === 'doctor') openDoctor();
+      else { nurseKey = b.key; startNurse(function () { show('nurse'); }); }
+    });
+  } else startOutside();
+  /* Served from outside Apps Script: everything comes from the part of the address after "#"
+     (a = web app, k = nurse key, req = the request named in a mail). That part is never sent to the host of this file. */
+  function startOutside() {
+    var q = {};
+    (location.hash.replace(/^#/, '') + '&' + location.search.replace(/^\?/, '')).split('&').forEach(function (kv) {
+      var i = kv.indexOf('='); if (i > 0 && !(kv.slice(0, i) in q)) { try { q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (e) {} }
+    });
+    var alnum = function (v) { return String(v || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40); };
+    var id = function (v) { v = String(v || '').replace(/[^A-Za-z0-9_-]/g, ''); return v.length >= 20 && v.length <= 150 ? v : ''; };
+    API = id(q.a);
+    if (!API) { try { API = id(localStorage.getItem('ecg-api')); } catch (e) {} }
+    if (!API) { $('p-wait').hidden = true; $('p-setup').hidden = false; return; }
+    try { localStorage.setItem('ecg-api', API); } catch (e) {}
+    window.addEventListener('hashchange', function () { location.reload(); });   // another QR code or mail link opened in this tab
+    wantCase = alnum(q.req);
+    var key = alnum(q.k);
+    if (key) { nurseKey = key; startNurse(function () { show('nurse'); }); } else openDoctor();
+  }
+  $('setupBtn').addEventListener('click', function () {
+    var m = /\/s\/([A-Za-z0-9_-]{20,150})\/(exec|dev)\b/.exec($('setupUrl').value);
+    if (!m || m[2] !== 'exec') { $('setupNote').textContent = m ? '/dev で終わるURLはテスト用です。/exec で終わるURLを貼り付けてください。' : '/exec で終わるURLを貼り付けてください。'; return; }
+    location.hash = 'a=' + m[1]; location.reload();
+  });
+  function openDoctor() {
+    $('p-denied').hidden = true;
+    $('lead').textContent = '病棟から届いた心電図を確認します。見終わったら削除してください。期限が来たものは自動で削除されます。';
+    show('doctor');
+  }
+  $('toDoctor').addEventListener('click', openDoctor);
+  /* The server writes the page's role into BOOT. If that did not happen, read the address instead:
+     a key (?k=…) means the nurse page, anything else the doctor page. */
+  function bootInfo(cb) {
+    if (BOOT && BOOT.view) { cb(BOOT); return; }
+    try {
+      google.script.url.getLocation(function (loc) {
+        var q = (loc && loc.parameter) || {}, key = String(q.k || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
+        wantCase = wantCase || String(q.req || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
+        cb({ view: key ? 'nurse' : 'doctor', key: key });
+      });
+    } catch (e) { cb({ view: 'doctor', key: '' }); }
+  }
+
+  window.__ecgApp = { state: st, runSample: runSample };
+})();
+
+</script>
+</body>
+</html>
