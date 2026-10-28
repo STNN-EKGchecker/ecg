@@ -388,7 +388,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       </div>
     </section>
   </div>
-  <p class="note" id="verNote" style="text-align:right">画面 v5.8</p>
+  <p class="note" id="verNote" style="text-align:right">画面 v5.9</p>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
@@ -601,8 +601,11 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
 
 
     /* ---------- 8. connected components ---------- */
+    var tA = Date.now();
     result.stats.lines = eraseLines(ink, W, H, Math.max(0.25 * Math.max(bbox.x1 - bbox.x0, bbox.y1 - bbox.y0), 120));
+    result.stats.msLines = Date.now() - tA; tA = Date.now();
     var comps = label(ink, W, H);
+    result.stats.msLabel = Date.now() - tA;
     /* how much of each component lies on paper (a bright surface), as opposed to the desk or a dark bezel */
     (function () {
       var lab = comps.lab, paperL = 0.45 * p90, i2;
@@ -783,7 +786,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     /* Without a coloured grid, also look for light lettering on a dark ground (a monitor screen):
        run once more on the negative and add what that finds. */
     function finish() {
-      if (plain && !opt.single) {
+      if (plain && !opt.single && !(result.trace && result.trace.rows >= 2)) {   // rows already found: dark lettering on a bright ground, no need to look for the reverse
         var neg = new Uint8ClampedArray(rgba.length);
         for (var q2 = 0; q2 < rgba.length; q2 += 4) { neg[q2] = 255 - rgba[q2]; neg[q2 + 1] = 255 - rgba[q2 + 1]; neg[q2 + 2] = 255 - rgba[q2 + 2]; neg[q2 + 3] = 255; }
         var r2 = analyze(neg, W, H, { forcePlain: true, single: true, noTrim: opt.noTrim });
@@ -853,21 +856,32 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       var fillc = c.area / (cw * ch), sz = Math.max(cw, ch), thin = Math.min(cw, ch) <= 4;
       if (c.pf < 0.7 || Math.min(cw, ch) < 2) continue;                                                 // off the paper, or a speck
       if (thin) { if (sz < 0.01 * full) continue; }                                                     // a flat stretch of baseline: a line, whatever its fill
-      else if (fillc > 0.3 || (sz < 0.02 * full && !(sz >= 0.01 * full && fillc <= 0.15 && c.area >= 8))) continue;   // solid (lettering, a sticker), or short
+      else if (fillc > 0.3 || (c.runs > 1.4 * cw && c.hruns > 1.4 * ch) || (sz < 0.02 * full && !(sz >= 0.01 * full && fillc <= 0.15 && c.area >= 8))) continue;   // solid or stacked strokes (lettering, a sticker), or short
       if (cw > 0.9 * gw && ch > 0.9 * gh) continue;                                                     // the whole sheet in one piece (a black grid)
       c.wisp = !thin && sz < 0.02 * full; c.thin = thin;
       longish.push(i);
     }
     if (longish.length < 2) return null;
-    /* the direction the traces run in: area-weighted mean of the principal axes (doubled angles, so 89° and -89° agree) */
-    var cs = 0, sn = 0;
+    /* the direction the traces run in: the angle at which the pieces are longest along and thinnest across.
+       Flat stretches of baseline decide it; a tall QRS spike is about as long as it is high and so says little. */
+    var shapes = [];
     longish.forEach(function (ix) {
-      c = comps[ix]; if (c.wisp || c.thin) return; var n = c.area, mx = c.sx / n, my = c.sy / n;
-      var vxx = c.sxx / n - mx * mx, vyy = c.syy / n - my * my, vxy = c.sxy / n - mx * my;
-      var th2 = Math.atan2(2 * vxy, vxx - vyy);                     // twice the axis angle
-      cs += n * Math.cos(th2); sn += n * Math.sin(th2);
+      c = comps[ix]; if (c.wisp) return; var n = c.area, mx = c.sx / n, my = c.sy / n;
+      shapes.push({ vxx: c.sxx / n - mx * mx, vyy: c.syy / n - my * my, vxy: c.sxy / n - mx * my, w: Math.sqrt(n) });
     });
-    var th = 0.5 * Math.atan2(sn, cs), vx = Math.cos(th), vy = Math.sin(th), ax = -vy, ay = vx;   // v: along the rows, a: across them
+    var bestTh = 0, bestScore = -1;
+    [[-12, 12], [78, 102]].forEach(function (range) {
+      for (var deg = range[0]; deg <= range[1]; deg += 0.5) {
+        var t2 = deg * Math.PI / 180, cs2 = Math.cos(t2), sn2 = Math.sin(t2), score = 0;
+        shapes.forEach(function (s) {                               // spread of the piece's pixels along v and across (u)
+          var sv = s.vxx * cs2 * cs2 + 2 * s.vxy * cs2 * sn2 + s.vyy * sn2 * sn2;
+          var su = s.vxx * sn2 * sn2 - 2 * s.vxy * cs2 * sn2 + s.vyy * cs2 * cs2;
+          score += s.w * Math.sqrt(Math.max(0, sv)) / (Math.sqrt(Math.max(0, su)) + 1);
+        });
+        if (score > bestScore) { bestScore = score; bestTh = t2; }
+      }
+    });
+    var th = bestTh, vx = Math.cos(th), vy = Math.sin(th), ax = -vy, ay = vx;   // v: along the rows, a: across them
     /* extents of each longish component along and across the rows, from its pixels */
     var lab = comps.lab, idx = new Int32Array(comps.length + 1), ext = [];
     longish.forEach(function (ix, j) { idx[ix + 1] = j + 1; ext.push({ u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity, ix: ix, wisp: comps[ix].wisp, thin: comps[ix].thin }); });
@@ -891,7 +905,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
         if (cur && v[0] <= cur[1]) { if (v[1] > cur[1]) cur[1] = v[1]; } else { if (cur) cov += cur[1] - cur[0]; cur = [v[0], v[1]]; }
       });
       if (cur) cov += cur[1] - cur[0];
-      return cov >= 0.25 * along || bd.longest >= 0.08 * along;
+      return cov >= 0.15 * along || bd.longest >= 0.08 * along;
     });
     if (root.ECG_DEBUG) console.log('traceRows: longish', longish.length, 'angle', (th * 180 / Math.PI).toFixed(1), 'along', Math.round(along), 'bands', JSON.stringify(bands.map(function (b) { return [Math.round(b[0]), Math.round(b[1]), Math.round(b.longest), b.iv.length]; })));
     if (bands.length < 2) return null;
@@ -907,7 +921,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       else frag.push({ u0: e.u0, u1: e.u1, n: 1, len: e.v1 - e.v0 });
     });
     var sizable = ext.filter(function (e) {
-      if (e.thin) return e.u1 - e.u0 <= 0.3 * (e.v1 - e.v0);                   // a flat stretch lying along the rows
+      if (e.thin) return e.v1 - e.v0 >= 0.025 * along && e.u1 - e.u0 <= 0.3 * (e.v1 - e.v0);   // a flat stretch lying along the rows (a dash in text is shorter)
       if (e.wisp) return true;
       if (e.v1 - e.v0 >= 0.04 * along || e.u1 - e.u0 <= 0.3 * (e.v1 - e.v0)) return true;
       return frag.some(function (g) { return e.u0 >= g.u0 && e.u1 <= g.u1 && g.n >= 3 && g.len >= 0.12 * along; });
@@ -1033,10 +1047,12 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       for (x = 0; x < W; x++) {
         var l = lab[row2 + x]; if (!l) continue;
         var r = find(l), ci = id[r];
-        if (!ci) { comps.push({ x0: x, y0: y, x1: x, y1: y, area: 0, sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0 }); ci = id[r] = comps.length; }
+        if (!ci) { comps.push({ x0: x, y0: y, x1: x, y1: y, area: 0, sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0, runs: 0, hruns: 0 }); ci = id[r] = comps.length; }
         var c = comps[ci - 1];
         if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y > c.y1) c.y1 = y; c.area++;
-        c.sx += x; c.sy += y; c.sxx += x * x; c.syy += y * y; c.sxy += x * y;       // moments: the direction a long component runs in
+        c.sx += x; c.sy += y; c.sxx += x * x; c.syy += y * y; c.sxy += x * y;       // moments
+        if (y === 0 || !ink[row2 - W + x]) c.runs++;                                   // vertical runs: a trace has about one per column, lettering more
+        if (x === 0 || !ink[row2 + x - 1]) c.hruns++;                                  // horizontal runs, for a trace running up the picture
         lab[row2 + x] = ci;
       }
     }
@@ -1646,7 +1662,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     var o = st.ocr;
     if (o.state === 'running') return '文字を読み取っています（終わるまで送信リストに追加できません）';
     if (o.state === 'done') return o.cover || o.frame ? '文字の読み取り：' + (o.cover ? 'ID・日付を ' + o.cover + ' か所隠しました' : '') + (o.cover && o.frame ? '。' : '') + (o.frame ? '氏名らしい文字 ' + o.frame + ' か所を赤い枠で示しました' : '') + '。'
-                                                   : '文字の読み取り：ID・日付・氏名らしい文字は見つかりませんでした。';
+                                                   : '文字の読み取り：残した範囲に ID・日付・氏名らしい文字はありませんでした' + (st.sum && st.sum.rows >= 2 ? '（切り落とした部分は数えていません）。' : '。');
     if (o.state === 'failed') return '文字の読み取りは使えませんでした（通信または端末の都合）。目で確かめてください。';
     if (o.state === 'off') return '文字の読み取りはこのページでは使えません。目で確かめてください。';
     return '';
