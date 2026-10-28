@@ -388,7 +388,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       </div>
     </section>
   </div>
-  <p class="note" id="verNote" style="text-align:right">画面 v5.7</p>
+  <p class="note" id="verNote" style="text-align:right">画面 v5.8</p>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
@@ -468,12 +468,12 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     }
 
     /* ---------- 4. fine cells: mean grid colour over paper pixels ---------- */
-    var fSum = new Float32Array(FN), fCnt = new Uint16Array(FN), fPap = new Uint16Array(FN);
+    var fSum = new Float32Array(FN), fCnt = new Uint16Array(FN), fPap = new Uint16Array(FN), fMax = new Uint8Array(FN);
     for (y = 0; y < H; y++) {
       var fy = (y / f) | 0, row = y * W, crow = ((y / cs) | 0) * CW;
       for (x = 0; x < W; x++) {
         var k = row + x, c = fy * FW + ((x / f) | 0);
-        fCnt[c]++;
+        fCnt[c]++; if (L[k] > fMax[c]) fMax[c] = L[k];
         if (L[k] >= minL && L[k] >= 0.7 * bgMax[crow + ((x / cs) | 0)]) { fPap[c]++; fSum[c] += projAt(k); }
       }
     }
@@ -546,9 +546,8 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     result.mode = plain ? 'plain' : 'grid';
     var bbox = { x0: kx0 * f, y0: ky0 * f, x1: Math.min(W, (kx1 + 1) * f), y1: Math.min(H, (ky1 + 1) * f) };
     result.grid.found = true; result.grid.bbox = bbox; result.keep = keep;
-    var keepNear = dilate(keep, FW, FH, 3);
 
-    /* ---------- 7. ink mask (only near the kept region) ----------
+    /* ---------- 7. ink mask (whole picture: the traces decide what is kept, see 8b) ----------
        JPEG keeps colour only at coarse scale, so thin grid lines cannot be told from ink by colour.
        They can by darkness: measure how dark this photo's bold grid lines are, threshold above that. */
     var D = new Uint8Array(N);                               // darkness vs local paper, x200
@@ -556,7 +555,6 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       var fy2 = (y / f) | 0, gy = (y + 0.5) / cs - 0.5, y0c = Math.floor(gy), wy = gy - y0c;
       var ya = y0c < 0 ? 0 : y0c, yb = y0c + 1 >= CH ? CH - 1 : y0c + 1;
       for (x = 0; x < W; x++) {
-        if (!keepNear[fy2 * FW + ((x / f) | 0)]) continue;
         var gx = (x + 0.5) / cs - 0.5, x0c = Math.floor(gx), wx = gx - x0c;
         var xa = x0c < 0 ? 0 : x0c, xb = x0c + 1 >= CW ? CW - 1 : x0c + 1;
         var lb = (bgMax[ya * CW + xa] * (1 - wx) + bgMax[ya * CW + xb] * wx) * (1 - wy) +
@@ -582,7 +580,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       var k2 = y * W + x, dk = D[k2];
       if (dk < tLo) continue;
       if (dk >= tHi || D[k2 - 1] >= tHi || D[k2 + 1] >= tHi || D[k2 - W] >= tHi || D[k2 + W] >= tHi ||
-          D[k2 - W - 1] >= tHi || D[k2 - W + 1] >= tHi || D[k2 + W - 1] >= tHi || D[k2 + W + 1] >= tHi) { ink[k2] = 1; inkCount++; }
+          D[k2 - W - 1] >= tHi || D[k2 - W + 1] >= tHi || D[k2 + W - 1] >= tHi || D[k2 + W + 1] >= tHi) { ink[k2] = 1; if (keep[((y / f) | 0) * FW + ((x / f) | 0)]) inkCount++; }
     }
     var hg = new Uint32Array(201), ng = 0;
     for (y = 2; y < H - 2; y += 2) {
@@ -605,19 +603,27 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     /* ---------- 8. connected components ---------- */
     result.stats.lines = eraseLines(ink, W, H, Math.max(0.25 * Math.max(bbox.x1 - bbox.x0, bbox.y1 - bbox.y0), 120));
     var comps = label(ink, W, H);
+    /* how much of each component lies on paper (a bright surface), as opposed to the desk or a dark bezel */
+    (function () {
+      var lab = comps.lab, paperL = 0.45 * p90, i2;
+      for (i2 = 0; i2 < comps.length; i2++) comps[i2].pap = 0;
+      for (y = 0; y < H; y++) { var fyp = ((y / f) | 0) * FW; for (x = 0; x < W; x++) { var l2 = lab[y * W + x]; if (l2 && fMax[fyp + ((x / f) | 0)] >= paperL) comps[l2 - 1].pap++; } }
+      for (i2 = 0; i2 < comps.length; i2++) comps[i2].pf = comps[i2].pap / comps[i2].area;
+    })();
 
     /* ---------- 8b. the waveform rows: what lies beyond them (header, footer) is cut away ---------- */
     /* ink that is not trace: what a text reader should look at (grid and waveforms removed) */
     result.textInk = textInk(comps, bbox, W, H);
-    result.trace = opt.noTrim ? null : traceRows(comps, bbox, W, H);
-    if (result.trace) {                                      // cells beyond the outer rows are dropped from "keep", like the margin
-      var tr = result.trace, nx0 = FW, ny0 = FH, nx1 = -1, ny1 = -1;
+    result.trace = opt.noTrim ? null : traceRows(comps, { x0: 0, y0: 0, x1: W, y1: H }, W, H);
+    if (result.trace) {                                      // what is kept is the rectangle the traces occupy, whatever the grid colour said
+      var tr = result.trace, nx0 = FW, ny0 = FH, nx1 = -1, ny1 = -1, keep2 = new Uint8Array(FN);
       for (y = 0; y < FH; y++) for (x = 0; x < FW; x++) {
-        var ck = y * FW + x; if (!keep[ck]) continue;
-        var uu = (x + 0.5) * f * tr.ax + (y + 0.5) * f * tr.ay;
-        if (uu < tr.lo || uu > tr.hi) { keep[ck] = 0; continue; }
+        var cx2 = (x + 0.5) * f, cy2 = (y + 0.5) * f, uu = cx2 * tr.ax + cy2 * tr.ay, vv = cx2 * tr.vx + cy2 * tr.vy;
+        if (uu < tr.lo || uu > tr.hi || vv < tr.vlo || vv > tr.vhi) continue;
+        keep2[y * FW + x] = 1;
         if (x < nx0) nx0 = x; if (x > nx1) nx1 = x; if (y < ny0) ny0 = y; if (y > ny1) ny1 = y;
       }
+      keep = keep2; result.keep = keep;
       bbox = { x0: nx0 * f, y0: ny0 * f, x1: Math.min(W, (nx1 + 1) * f), y1: Math.min(H, (ny1 + 1) * f) };
       result.grid.bbox = bbox;
     }
@@ -832,7 +838,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     var full = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0), small = new Uint8Array(comps.length + 1), i, c;
     for (i = 0; i < comps.length; i++) {
       c = comps[i]; var cw = c.x1 - c.x0 + 1, ch = c.y1 - c.y0 + 1;
-      if (Math.max(cw, ch) < 0.06 * full && c.area >= 3) small[i + 1] = 1;
+      if (Math.max(cw, ch) < 0.06 * full && c.area >= 3 && c.pf >= 0.5) small[i + 1] = 1;
     }
     var out = new Uint8Array(W * H), lab = comps.lab;
     for (i = 0; i < W * H; i++) if (lab[i] && small[lab[i]]) out[i] = 1;
@@ -844,15 +850,19 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     for (i = 0; i < comps.length; i++) {
       c = comps[i];
       var cw = c.x1 - c.x0 + 1, ch = c.y1 - c.y0 + 1;
-      if (Math.max(cw, ch) < 0.02 * full || Math.min(cw, ch) < 3 || c.area / (cw * ch) > 0.3) continue;   // short, or solid (lettering, a sticker)
+      var fillc = c.area / (cw * ch), sz = Math.max(cw, ch), thin = Math.min(cw, ch) <= 4;
+      if (c.pf < 0.7 || Math.min(cw, ch) < 2) continue;                                                 // off the paper, or a speck
+      if (thin) { if (sz < 0.01 * full) continue; }                                                     // a flat stretch of baseline: a line, whatever its fill
+      else if (fillc > 0.3 || (sz < 0.02 * full && !(sz >= 0.01 * full && fillc <= 0.15 && c.area >= 8))) continue;   // solid (lettering, a sticker), or short
       if (cw > 0.9 * gw && ch > 0.9 * gh) continue;                                                     // the whole sheet in one piece (a black grid)
+      c.wisp = !thin && sz < 0.02 * full; c.thin = thin;
       longish.push(i);
     }
     if (longish.length < 2) return null;
     /* the direction the traces run in: area-weighted mean of the principal axes (doubled angles, so 89° and -89° agree) */
     var cs = 0, sn = 0;
     longish.forEach(function (ix) {
-      c = comps[ix]; var n = c.area, mx = c.sx / n, my = c.sy / n;
+      c = comps[ix]; if (c.wisp || c.thin) return; var n = c.area, mx = c.sx / n, my = c.sy / n;
       var vxx = c.sxx / n - mx * mx, vyy = c.syy / n - my * my, vxy = c.sxy / n - mx * my;
       var th2 = Math.atan2(2 * vxy, vxx - vyy);                     // twice the axis angle
       cs += n * Math.cos(th2); sn += n * Math.sin(th2);
@@ -860,7 +870,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     var th = 0.5 * Math.atan2(sn, cs), vx = Math.cos(th), vy = Math.sin(th), ax = -vy, ay = vx;   // v: along the rows, a: across them
     /* extents of each longish component along and across the rows, from its pixels */
     var lab = comps.lab, idx = new Int32Array(comps.length + 1), ext = [];
-    longish.forEach(function (ix, j) { idx[ix + 1] = j + 1; ext.push({ u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity, ix: ix }); });
+    longish.forEach(function (ix, j) { idx[ix + 1] = j + 1; ext.push({ u0: Infinity, u1: -Infinity, v0: Infinity, v1: -Infinity, ix: ix, wisp: comps[ix].wisp, thin: comps[ix].thin }); });
     for (var y = 0; y < H; y++) for (var x = 0, k = y * W; x < W; x++, k++) {
       var l = lab[k]; if (!l) continue; var j = idx[l]; if (!j) continue;
       var e = ext[j - 1], u = x * ax + y * ay, v = x * vx + y * vy;
@@ -870,7 +880,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     /* pieces sharing the same band across the rows belong to one row, even when a trace is broken into beats;
        a row counts when its pieces together span a good part of the sheet, or one piece alone is long */
     var bands = [];
-    ext.filter(function (e) { return e.v1 - e.v0 >= 0.04 * along; }).sort(function (p, q) { return p.u0 - q.u0; }).forEach(function (e) {   // rows: from the larger pieces
+    ext.filter(function (e) { return !e.thin && e.v1 - e.v0 >= 0.04 * along; }).sort(function (p, q) { return p.u0 - q.u0; }).forEach(function (e) {   // rows: from the larger pieces
       var last = bands[bands.length - 1];
       if (last && e.u0 <= last[1]) { if (e.u1 > last[1]) last[1] = e.u1; last.iv.push([e.v0, e.v1]); if (e.v1 - e.v0 > last.longest) last.longest = e.v1 - e.v0; }
       else { var nb = [e.u0, e.u1]; nb.iv = [[e.v0, e.v1]]; nb.longest = e.v1 - e.v0; bands.push(nb); }
@@ -885,15 +895,40 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     });
     if (root.ECG_DEBUG) console.log('traceRows: longish', longish.length, 'angle', (th * 180 / Math.PI).toFixed(1), 'along', Math.round(along), 'bands', JSON.stringify(bands.map(function (b) { return [Math.round(b[0]), Math.round(b[1]), Math.round(b.longest), b.iv.length]; })));
     if (bands.length < 2) return null;
-    var lo = bands[0][0], hi = bands[bands.length - 1][1], pitch = (hi - lo) / bands.length;
+    var lo = bands[0][0], hi = bands[bands.length - 1][1], pitch = (hi - lo) / bands.length, rowsLo = lo, rowsHi = hi;
     if (hi - lo < 0.2 * (Math.abs(gw * ax) + Math.abs(gh * ay))) return null;
     /* shorter pieces just beyond the outer rows (a faint or broken trace) widen the kept part rather than being lost */
-    for (var pass = 0; pass < 3; pass++) ext.forEach(function (e) {              // repeated: a row of pieces beyond a row of pieces
-      if (e.u1 > lo - 1.2 * pitch && e.u0 < lo) lo = e.u0;
-      if (e.u0 < hi + 1.2 * pitch && e.u1 > hi) hi = e.u1;
+    /* a piece may widen the kept part when it is long, thin like a strip of trace, or one of several fragments
+       lying in one band (a faint row broken into beats); a letter or two cannot */
+    var frag = [];
+    ext.filter(function (e) { return !e.thin && !e.wisp; }).sort(function (p, q) { return p.u0 - q.u0; }).forEach(function (e) {
+      var last = frag[frag.length - 1];
+      if (last && e.u0 <= last.u1) { if (e.u1 > last.u1) last.u1 = e.u1; last.n++; last.len += e.v1 - e.v0; }
+      else frag.push({ u0: e.u0, u1: e.u1, n: 1, len: e.v1 - e.v0 });
     });
-    var pad = Math.max(12, 0.25 * pitch);
-    return { rows: bands.length, ax: ax, ay: ay, lo: lo - pad, hi: hi + pad, angle: th * 180 / Math.PI };
+    var sizable = ext.filter(function (e) {
+      if (e.thin) return e.u1 - e.u0 <= 0.3 * (e.v1 - e.v0);                   // a flat stretch lying along the rows
+      if (e.wisp) return true;
+      if (e.v1 - e.v0 >= 0.04 * along || e.u1 - e.u0 <= 0.3 * (e.v1 - e.v0)) return true;
+      return frag.some(function (g) { return e.u0 >= g.u0 && e.u1 <= g.u1 && g.n >= 3 && g.len >= 0.12 * along; });
+    });
+    for (var pass = 0; pass < 4; pass++) sizable.forEach(function (e) {         // repeated: a row of pieces beyond a row of pieces
+      if (e.u1 > lo - 1.5 * pitch && e.u0 < lo) lo = e.u0;
+      if (e.u0 < hi + 1.5 * pitch && e.u1 > hi) hi = e.u1;
+    });
+    var pad = Math.max(12, 0.25 * pitch), vlo = Infinity, vhi = -Infinity;
+    /* along the rows: as far as anything within the rows goes - trace pieces however short, lead labels, calibration pulses */
+    for (i = 0; i < comps.length; i++) {
+      c = comps[i]; if (c.area < 4 || c.pf < 0.7) continue;
+      var cw2 = c.x1 - c.x0 + 1, ch2 = c.y1 - c.y0 + 1; if (cw2 > 0.9 * gw && ch2 > 0.9 * gh) continue;
+      var uc = (c.x0 + c.x1) / 2 * ax + (c.y0 + c.y1) / 2 * ay; if (uc < lo || uc > hi) continue;
+      var vs = [c.x0 * vx + c.y0 * vy, c.x1 * vx + c.y0 * vy, c.x0 * vx + c.y1 * vy, c.x1 * vx + c.y1 * vy];
+      var vmin = Math.min.apply(null, vs), vmax = Math.max.apply(null, vs);
+      if (vmin < vlo) vlo = vmin; if (vmax > vhi) vhi = vmax;
+    }
+    var padV = Math.max(20, 0.5 * pitch);
+    return { rows: bands.length, ax: ax, ay: ay, vx: vx, vy: vy, lo: lo - pad, hi: hi + pad, vlo: vlo - padV, vhi: vhi + padV,
+             rowsLo: Math.min(rowsLo, lo) - 0.1 * pitch, rowsHi: Math.max(rowsHi, hi) + 0.1 * pitch, angle: th * 180 / Math.PI };
   }
   function groupPass(cands, vertical, sMax) {
     var n = cands.length, idx = new Array(n), i, j;
@@ -1246,6 +1281,10 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
   }
 
   function inZone(an, b) {
+    if (an.trace) {                                    // rows found: lettering worth a frame lies above the first row or below the last
+      var u = (b.x + b.w / 2) * an.trace.ax + (b.y + b.h / 2) * an.trace.ay;
+      return u < an.trace.rowsLo || u > an.trace.rowsHi;
+    }
     var bb = an.grid.bbox, W = bb.x1 - bb.x0, H = bb.y1 - bb.y0;
     var fx = (b.x + b.w / 2 - bb.x0) / W, fy = (b.y + b.h / 2 - bb.y0) / H;
     if (fy < ZONE.top || fy > 1 - ZONE.bottom || fx < ZONE.side || fx > 1 - ZONE.side) return true;
@@ -1259,7 +1298,9 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     var bb = an.grid.bbox, list = [];
     an.boxes.forEach(function (b) {
       if (!isDetection(b)) return;
-      var sticker = b.kind === 'object';                 // a label stuck on the sheet: not a waveform, wherever it is -> covered at once
+      var sheet = (bb.x1 - bb.x0) * (bb.y1 - bb.y0), part = b.w * b.h / sheet;
+      var sticker = b.kind === 'object' && part <= 0.08;   // a label stuck on the sheet: not a waveform, wherever it is -> covered at once
+      if (b.kind === 'object' && part > 0.15) return;      // a "hole" that big is the grid finder failing, not a label
       if (!sticker && !inZone(an, b)) return;
       var x0 = Math.max(bb.x0, b.x), y0 = Math.max(bb.y0, b.y), x1 = Math.min(bb.x1, b.x + b.w), y1 = Math.min(bb.y1, b.y + b.h);
       if (x1 - x0 >= 4 && y1 - y0 >= 4) list.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, auto: sticker });
@@ -1343,7 +1384,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
 /* Second pair of eyes: a text reader (Tesseract.js) run on the lettering-only image the detector
    produces (grid and waveforms removed). Everything happens inside the browser; nothing is sent anywhere.
    What it reads is sorted into:
-     cover  - identifiers: 6+ digit numbers and dates (covered at once; a press takes the cover off)
+     cover  - identifiers: 5+ digit numbers and dates (covered at once; a press takes the cover off)
      frame  - Japanese words that are not ECG vocabulary, and Latin words next to a hit (red frames, near the edges only) */
 (function (root) {
   'use strict';
@@ -1368,7 +1409,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
   var DATE = /((19|20)\d{2}[\/\-.年]\s?\d{1,2}[\/\-.月]\s?\d{1,2})|(\b\d{2}[\/.]\d{1,2}[\/.]\d{1,2}\b)|([MTSHR]\d{1,2}[\/.年]\d{1,2}[\/.月]\d{1,2})|(\d{1,2}月\d{1,2}日)/;
   function isIdLike(t) {
     var digits = t.replace(/\D/g, ''), distinct = {}; for (var i = 0; i < digits.length; i++) distinct[digits[i]] = 1;
-    if (digits.length >= 6 && /\d[\d\-]{4,}\d/.test(t) && Object.keys(distinct).length >= 3) return true;   // spikes read as "1111111" are not an ID
+    if ((/\d{5,}/.test(t) || (digits.length >= 6 && /\d[\d\-]{4,}\d/.test(t))) && Object.keys(distinct).length >= 3) return true;   // 5+ digits; spikes read as "1111111" are not an ID
     return DATE.test(t);
   }
   function jpRuns(t) {
