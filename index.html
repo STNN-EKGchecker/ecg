@@ -234,6 +234,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     <section class="panel" id="p-check" aria-labelledby="h-check">
       <h2 id="h-check"><span class="n">2</span>確かめて、送信リストに入れる</h2>
       <div class="banner" id="banner" data-level="idle" role="status" aria-live="polite"><strong>まだ写真がありません</strong><span>「1 撮る」から始めてください。</span></div>
+      <p class="hint" id="ocrNote" role="status" hidden></p>
       <div class="toolbar">
         <button class="btn small" type="button" id="v-out" aria-pressed="true" disabled>送信用の画像</button>
         <button class="btn small" type="button" id="v-rev" aria-pressed="false" disabled>撮った写真</button>
@@ -387,9 +388,10 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       </div>
     </section>
   </div>
-  <p class="note" id="verNote" style="text-align:right">画面 v5.4</p>
+  <p class="note" id="verNote" style="text-align:right">画面 v5.5</p>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>window.ECG_BOOT = /*__BOOT__*/null;</script>
 <script>
 /* ECG photo de-identification core. Pure functions on RGBA arrays, no DOM.
@@ -604,6 +606,8 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     var comps = label(ink, W, H);
 
     /* ---------- 8b. the waveform rows: what lies beyond them (header, footer) is cut away ---------- */
+    /* ink that is not trace: what a text reader should look at (grid and waveforms removed) */
+    result.textInk = textInk(comps, bbox, W, H);
     result.trace = opt.noTrim ? null : traceRows(comps, bbox, W, H);
     if (result.trace) {                                      // cells beyond the outer rows are dropped from "keep", like the margin
       var tr = result.trace, nx0 = FW, ny0 = FH, nx1 = -1, ny1 = -1;
@@ -777,6 +781,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
         for (var q2 = 0; q2 < rgba.length; q2 += 4) { neg[q2] = 255 - rgba[q2]; neg[q2 + 1] = 255 - rgba[q2 + 1]; neg[q2 + 2] = 255 - rgba[q2 + 2]; neg[q2 + 3] = 255; }
         var r2 = analyze(neg, W, H, { forcePlain: true, single: true, noTrim: opt.noTrim });
         if (!result.trace && r2.trace) { result.trace = r2.trace; result.grid.bbox = r2.grid.bbox; result.keep = r2.keep; }   // bright traces on a dark screen
+        if (r2.textInk) { if (!result.textInk) result.textInk = r2.textInk; else for (var q3 = 0; q3 < r2.textInk.length; q3++) if (r2.textInk[q3]) result.textInk[q3] = 1; }
         r2.boxes.forEach(function (b6) {
           var inside = result.boxes.some(function (o) { return b6.x >= o.x && b6.y >= o.y && b6.x + b6.w <= o.x + o.w && b6.y + b6.h <= o.y + o.h; });
           if (!inside) result.boxes.push(b6);
@@ -820,6 +825,17 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
      names and IDs are printed above or below. The sheet may be tilted or sideways in the photo, so the rows
      are measured along the direction the traces run in. Returns null unless at least two rows are found,
      so a single strip or a screen is left alone. Result: { rows, ax, ay, lo, hi } = keep lo <= x*ax + y*ay <= hi. */
+  /* Ink pixels belonging to small components only: lettering, not grid lines or waveforms. */
+  function textInk(comps, bb, W, H) {
+    var full = Math.max(bb.x1 - bb.x0, bb.y1 - bb.y0), small = new Uint8Array(comps.length + 1), i, c;
+    for (i = 0; i < comps.length; i++) {
+      c = comps[i]; var cw = c.x1 - c.x0 + 1, ch = c.y1 - c.y0 + 1;
+      if (Math.max(cw, ch) < 0.06 * full && c.area >= 3) small[i + 1] = 1;
+    }
+    var out = new Uint8Array(W * H), lab = comps.lab;
+    for (i = 0; i < W * H; i++) if (lab[i] && small[lab[i]]) out[i] = 1;
+    return out;
+  }
   function traceRows(comps, bb, W, H) {
     var gw = bb.x1 - bb.x0, gh = bb.y1 - bb.y0, full = Math.max(gw, gh), i, c;
     var longish = [];
@@ -1265,6 +1281,119 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
                    candidates: candidates, isDetection: isDetection, ZONE: ZONE };
 })(window);
 
+/* Second pair of eyes: a text reader (Tesseract.js) run on the lettering-only image the detector
+   produces (grid and waveforms removed). Everything happens inside the browser; nothing is sent anywhere.
+   What it reads is sorted into:
+     cover  - identifiers: 6+ digit numbers, dates, Japanese words that are not ECG vocabulary (covered at once)
+     frame  - the rest of a line that held one of those, and low-confidence Japanese words (shown as red frames) */
+(function (root) {
+  'use strict';
+  var VERSION = '5.1.1';
+  var DEFAULTS = { langPath: 'https://tessdata.projectnaptha.com/4.0.0_fast' };   // the small models (~3.5 MB for jpn+eng)
+  var worker = null, loading = null, failed = false, TIMEOUT = 25000;
+
+  /* ECG vocabulary: Japanese words that appear on printouts and are not a person's name */
+  var JP_WORDS = ['心電図', '誘導', '記録', '速度', '感度', '標準', '自動', '解析', '所見', '判定', '確認', '未確認', '要確認', '正常', '範囲', '異常',
+    '洞調律', '調律', '洞性', '頻脈', '徐脈', '不整脈', '細動', '粗動', '期外収縮', '心房', '心室', '上室', '虚血', '梗塞', '疑い', '可能性', 'ブロック', '脚',
+    '軸', '偏位', '肥大', '拡大', '低電位', '延長', '短縮', '変化', '上昇', '下降', '陰性', '陽性', '境界', '高度', '軽度', '中等度', '完全', '不完全', '一度', '二度', '三度',
+    '波', '間隔', '時間', '心拍', '心拍数', '年齢', '性別', '歳', '才', '男', '女', '男性', '女性', '氏名', '患者', '番号', '検査', '日時', '日付', '時刻', '病棟', '病院', '病室',
+    '科', '内科', '外科', '循環器', '救急', '室', '階', '東', '西', '南', '北', '棟', '号', '様', 'さん', '先生', '技師', '医師', '看護師', 'フィルタ', 'フィルター', 'ノイズ', '筋電', '基線',
+    'ベッド', 'モニタ', 'モニター', 'アラーム', '設定', '表示', '印刷', '出力', '保存', '前回', '今回', '比較', '経過', '安静', '負荷', '運動', '仰臥', '臥位', '座位', '立位',
+    '体位', '体重', '身長', '血圧', '体温', '脈拍', '呼吸', '酸素', '飽和', '測定', '計測', '値', '平均', '最大', '最小', '基準', '参考', '備考', 'コメント', '依頼', '担当', '部署', '外来', '入院'];
+  var LATIN_OK = /^(I|II|III|aV[RLF]|V[1-9]|HR|PR|QRS|QT|QTc|RR|P|T|ST|ms|mV|mm|Hz|AC|DC|BED|ID|No|Nr|Dr|ECG|EKG|FILTER|AUTO|MANUAL|SpO2|RESP|NIBP|ART|PLETH|TEMP|CO2|EtCO2|ETCO2|bpm|BPM|rpm|RPM|min|sec|s|x|X|Lead|LEAD|lead|Speed|Gain|Filter|Rate|Rhythm|Axis|Int|Dur|Vent|Atr|PVC|PAC|VPC|SVPC|APC|AF|AFL|SR|NSR|VT|VF|AV|LBBB|RBBB|LAD|RAD|LVH|RVH|LAH|LPH|WPW|MI|QTCF|QTCB|ON|OFF|OK|NG|Date|Time|Name|Sex|Age|Male|Female|M|F)$/;
+
+  function normalize(t) {
+    return String(t || '').replace(/[０-９Ａ-Ｚａ-ｚ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0); })
+      .replace(/[／－．：]/g, function (ch) { return { '／': '/', '－': '-', '．': '.', '：': ':' }[ch]; }).trim();
+  }
+  var DATE = /((19|20)\d{2}[\/\-.年]\s?\d{1,2}[\/\-.月]\s?\d{1,2})|(\b\d{2}[\/.]\d{1,2}[\/.]\d{1,2}\b)|([MTSHR]\d{1,2}[\/.年]\d{1,2}[\/.月]\d{1,2})|(\d{1,2}月\d{1,2}日)/;
+  function isIdLike(t) { return (t.replace(/\D/g, '').length >= 6 && /\d[\d\-]{4,}\d/.test(t)) || DATE.test(t); }
+  function jpRuns(t) {
+    var s = t;
+    JP_WORDS.forEach(function (w) { s = s.split(w).join(' '); });
+    return s.match(/[ぁ-ゖァ-ヺー一-鿿ｦ-ﾟ]{2,}/g) || [];
+  }
+  function isJpText(t) { return jpRuns(t).length > 0; }
+  function isLatinWord(t) { return /^[A-Za-z][A-Za-z.'-]{2,}$/.test(t) && !LATIN_OK.test(t.replace(/[.'-]/g, '')); }
+
+  function paths() { var p = root.ECG_OCR_PATHS || {}, o = {}; for (var k in DEFAULTS) o[k] = DEFAULTS[k]; for (k in p) o[k] = p[k]; return o; }
+  function withTimeout(pr, ms) {
+    return new Promise(function (res, rej) {
+      var t = setTimeout(function () { rej(new Error('timeout')); }, ms);
+      pr.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); });
+    });
+  }
+  function ready() {
+    if (worker) return Promise.resolve(worker);
+    if (failed) return Promise.reject(new Error('unavailable'));
+    if (!root.Tesseract) { failed = true; return Promise.reject(new Error('nolib')); }
+    if (!loading) {
+      loading = withTimeout(root.Tesseract.createWorker(['jpn', 'eng'], 1, paths()), TIMEOUT)
+        .then(function (w) { worker = w; return w; }, function (e) { failed = true; loading = null; throw e; });
+    }
+    return loading;
+  }
+  function available() { return !!root.Tesseract && !failed; }
+
+  /* the lettering-only picture: black ink on white */
+  function textCanvas(an) {
+    var W = an.W, H = an.H, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var c = cv.getContext('2d'), id = c.createImageData(W, H), d = id.data, m = an.textInk, i, v;
+    for (i = 0; i < W * H; i++) { v = m[i] ? 0 : 255; d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+    c.putImageData(id, 0, 0);
+    return cv;
+  }
+
+  /* -> { cover: [box], frame: [box], ms } ; boxes in work-canvas coordinates, clipped to the kept area */
+  function run(an) {
+    if (!an || !an.textInk || !an.grid.found) return Promise.resolve({ cover: [], frame: [], ms: 0, skipped: true });
+    var t0 = Date.now(), bb = an.grid.bbox;
+    return ready().then(function (w) { return withTimeout(w.recognize(textCanvas(an)), TIMEOUT); }).then(function (res) {
+      var cover = [], frame = [];
+      function box(b, pad) {
+        var h = b.y1 - b.y0, p = Math.round(pad * h) + 2;
+        var x0 = Math.max(bb.x0, b.x0 - p), y0 = Math.max(bb.y0, b.y0 - p), x1 = Math.min(bb.x1, b.x1 + p), y1 = Math.min(bb.y1, b.y1 + p);
+        return x1 - x0 >= 4 && y1 - y0 >= 4 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+      }
+      (res.data.lines || []).forEach(function (line) {
+        var words = (line.words || []).map(function (wd) { return { t: normalize(wd.text), c: wd.confidence || 0, b: wd.bbox }; }).filter(function (wd) { return wd.t; });
+        var hit = false, out = [];
+        words.forEach(function (wd) {
+          var h = wd.b.y1 - wd.b.y0; if (h < 8 || h > 0.25 * an.H) return;        // not lettering
+          if (isIdLike(wd.t)) { out.push(['cover', wd]); hit = true; }
+          else if (isJpText(wd.t)) { if (wd.c < 25) return; out.push([wd.c >= 55 ? 'cover' : 'frame', wd]); hit = true; }   // below 25: grid dust read as kana
+          else if (isLatinWord(wd.t) && wd.c >= 30) out.push(['latin', wd]);
+        });
+        if (!hit) return;
+        out.forEach(function (o) {
+          var b = box(o[1].b, 0.3); if (!b) return;
+          if (o[0] === 'cover') cover.push(b); else frame.push(b);   // a Latin word on a line with a name or ID: maybe a romanized name
+        });
+      });
+      return { cover: merge(cover), frame: merge(frame), ms: Date.now() - t0 };
+    });
+  }
+  /* neighbouring boxes on one line become one */
+  function merge(list) {
+    var again = true;
+    while (again) {
+      again = false;
+      for (var i = 0; i < list.length && !again; i++) for (var j = i + 1; j < list.length && !again; j++) {
+        var A = list[i], B = list[j], g = 0.8 * Math.min(A.h, B.h);
+        var gx = Math.max(A.x, B.x) - Math.min(A.x + A.w, B.x + B.w), gy = Math.max(A.y, B.y) - Math.min(A.y + A.h, B.y + B.h);
+        if (gx <= g && gy <= -0.5 * Math.min(A.h, B.h)) {
+          var nx = Math.min(A.x, B.x), ny = Math.min(A.y, B.y);
+          list[i] = { x: nx, y: ny, w: Math.max(A.x + A.w, B.x + B.w) - nx, h: Math.max(A.y + A.h, B.y + B.h) - ny };
+          list.splice(j, 1); again = true;
+        }
+      }
+    }
+    return list;
+  }
+
+  root.ECGOcr = { ready: ready, run: run, available: available, VERSION: VERSION, _classify: { isIdLike: isIdLike, isJpText: isJpText, isLatinWord: isLatinWord, normalize: normalize } };
+})(window);
+
 (function () {
   'use strict';
   var P = window.ECGPipe, $ = function (id) { return document.getElementById(id); };
@@ -1328,7 +1457,8 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
   function kindBadge(it) { return el('span', 'badge' + (it.kind === 'now' ? ' now' : ''), it.kind === 'now' ? '今回' : '過去'); }
 
   /* ================= nurse 1–2: capture, anonymize, check ================= */
-  var st = { work: null, an: null, sum: null, manual: [], view: 'out', src: '', out: null, rev: null, draw: false, crop: false, drag: null, ms: 0, added: false, recTouched: false, cands: [], picked: {}, orig: null, cropped: false, whole: false };
+  var st = { work: null, an: null, sum: null, manual: [], view: 'out', src: '', out: null, rev: null, draw: false, crop: false, drag: null, ms: 0, added: false, recTouched: false, cands: [], picked: {}, orig: null, cropped: false, whole: false, ocr: { state: 'idle' } };
+  var ocrRun = 0;
   var view = $('view'), vctx = view.getContext('2d'), stage = $('stage');
   var SAMPLE_NAMES = { clean: '見本「文字なし」', margin: '見本「余白に氏名・ID」', ingrid: '見本「方眼内に氏名・ID」', photo: '見本「斜め撮影・ラベル」' };
 
@@ -1402,9 +1532,45 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
     stage.classList.toggle('draw', st.draw || st.crop);
     stage.classList.toggle('tap', canDraw && !st.draw && !st.crop && (st.cands.length > 0 || st.manual.length > 0));
     $('srcLabel').textContent = st.src;
-    $('confirmBox').disabled = !v.ok || st.added;
+    $('confirmBox').disabled = !v.ok || st.added || st.ocr.state === 'running';
     if (!v.ok) $('confirmBox').checked = false;
-    syncAdd(); facts(v); paint();
+    ocrNote(); syncAdd(); facts(v); paint();
+  }
+  function ocrText() {
+    var o = st.ocr;
+    if (o.state === 'running') return '文字を読み取っています（終わるまで送信リストに追加できません）';
+    if (o.state === 'done') return o.cover || o.frame ? '文字の読み取り：ID・日付・氏名らしい文字を ' + o.cover + ' か所隠しました' + (o.frame ? '。ほかに ' + o.frame + ' か所を赤い枠で示しました' : '') + '。'
+                                                   : '文字の読み取り：ID・日付・氏名らしい文字は見つかりませんでした。';
+    if (o.state === 'failed') return '文字の読み取りは使えませんでした（通信または端末の都合）。目で確かめてください。';
+    if (o.state === 'off') return '文字の読み取りはこのページでは使えません。目で確かめてください。';
+    return '';
+  }
+  function ocrNote() { var t = st.sum ? ocrText() : ''; $('ocrNote').hidden = !t; $('ocrNote').textContent = t; }
+  /* the text reader runs after the fast check; its findings join the candidates (identifiers already covered) */
+  function startOcr() {
+    var id = ++ocrRun;
+    if (!window.ECGOcr || !ECGOcr.available() || !st.an || !st.an.textInk) { st.ocr = { state: 'off' }; return; }
+    st.ocr = { state: 'running' };
+    ECGOcr.run(st.an).then(function (r) {
+      if (id !== ocrRun || !st.an) return;
+      var cover = 0, frame = 0;
+      function overlapIdx(b) {
+        for (var i = 0; i < st.cands.length; i++) {
+          var c = st.cands[i], iw = Math.min(c.x + c.w, b.x + b.w) - Math.max(c.x, b.x), ih = Math.min(c.y + c.h, b.y + b.h) - Math.max(c.y, b.y);
+          if (iw > 0 && ih > 0 && iw * ih >= 0.5 * Math.min(c.w * c.h, b.w * b.h)) return i;
+        }
+        return -1;
+      }
+      r.cover.forEach(function (b) {
+        var i = overlapIdx(b);
+        if (i < 0) { st.cands.push(b); i = st.cands.length - 1; }
+        else { var c = st.cands[i], nx = Math.min(c.x, b.x), ny = Math.min(c.y, b.y); st.cands[i] = { x: nx, y: ny, w: Math.max(c.x + c.w, b.x + b.w) - nx, h: Math.max(c.y + c.h, b.y + b.h) - ny }; }
+        if (!st.picked[i]) { st.picked[i] = true; cover++; }
+      });
+      r.frame.forEach(function (b) { if (overlapIdx(b) < 0) { st.cands.push(b); frame++; } });
+      st.ocr = { state: 'done', cover: cover, frame: frame, ms: r.ms };
+      render();
+    }, function () { if (id !== ocrRun) return; st.ocr = { state: 'failed' }; render(); });
   }
   function facts(v) {
     var an = st.an, s = st.sum, rows = [['読み込んだ写真', an.W + ' × ' + an.H + ' px']];
@@ -1415,6 +1581,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       rows.push(['端で見つけた文字', s.searchable ? st.cands.length + ' か所' : '探せない画像（ピント・明暗）']);
       rows.push(['隠した箇所', '赤い枠から ' + pickedCount() + ' か所・手で ' + st.manual.length + ' か所']);
     }
+    rows.push(['文字の読み取り', st.ocr.state === 'done' ? '隠した ' + st.ocr.cover + ' か所・枠 ' + st.ocr.frame + ' か所（' + ((st.ocr.ms || 0) / 1000).toFixed(1) + ' 秒）' : st.ocr.state === 'running' ? '読み取り中' : '使えない']);
     rows.push(['位置情報・撮影日時', '送る画像には含めない']);
     rows.push(['処理時間', (st.ms / 1000).toFixed(1) + ' 秒']);
     var dl = $('facts'); dl.textContent = '';
@@ -1445,7 +1612,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
         st.orig = null; $('itemNote').value = ''; st.recTouched = false;
         $('recAt').value = $('kind-past').checked ? '' : localInput(new Date());
       }
-      render();
+      st.ocr = { state: 'idle' }; render(); startOcr();
     }, 30);
   }
   /* two buttons: recent Android versions no longer offer the camera from the ordinary photo chooser */
@@ -1651,13 +1818,13 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
   });
   /* after sending, nothing of the ECG stays on screen or in memory */
   function clearCheck() {
-    st.work = st.an = st.sum = st.out = st.rev = null; st.manual = []; st.added = false; st.draw = false; st.crop = false; st.drag = null; st.src = ''; st.sample = false; st.cands = []; st.picked = {}; st.orig = null; st.cropped = false; st.whole = false;
+    st.work = st.an = st.sum = st.out = st.rev = null; st.manual = []; st.added = false; st.draw = false; st.crop = false; st.drag = null; st.src = ''; st.sample = false; st.cands = []; st.picked = {}; st.orig = null; st.cropped = false; st.whole = false; st.ocr = { state: 'idle' }; ocrRun++;
     view.width = 1600; view.height = 400; vctx.clearRect(0, 0, view.width, view.height);
     banner('idle', '送信が済みました', '次の心電図は「1 撮る」から始めてください。');
     ['v-out', 'v-rev', 'drawBtn', 'cropBtn', 'undoBtn', 'confirmBox'].forEach(function (id) { $(id).disabled = true; });
     $('uncropBtn').hidden = true; stage.classList.remove('tap');
     $('confirmBox').checked = false; $('itemNote').value = ''; $('srcLabel').textContent = ''; $('drawHint').textContent = '';
-    $('legend').hidden = true; $('facts').textContent = ''; $('tech').textContent = ''; stage.classList.remove('draw');
+    $('legend').hidden = true; $('facts').textContent = ''; $('tech').textContent = ''; stage.classList.remove('draw'); $('ocrNote').hidden = true;
     syncAdd();
   }
 
@@ -1981,6 +2148,7 @@ button.row[aria-current="true"] { border-color: var(--accent); box-shadow: inset
       if (!r || !r.ok) { $('p-wait').hidden = true; $('p-denied').hidden = false; return; }
       maxImages = r.maxImages || 6; recipients = r.recipients || [];
       renderDraft(); renderTo(); after();
+      if (window.ECGOcr && ECGOcr.available()) ECGOcr.ready().catch(function () {});   // fetch the reader now, not at the first photo
     }).catch(function (e) { $('waitText').textContent = e && ERR[e.error] ? ERR[e.error] : '読み込めませんでした。' + errText(e); });
   }
   /* demo only: one marked example so the doctor's list is not empty */
